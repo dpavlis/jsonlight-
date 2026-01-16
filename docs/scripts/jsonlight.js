@@ -927,6 +927,7 @@ function renderKV(key, loader) {
             }
     }
     kvText.appendChild(valueSpan);
+    addNodeActionButtons(kvRoot);
     return kvRoot;
 }
 
@@ -1066,7 +1067,41 @@ function addEditButton(kvRoot) {
     else {
         buttonGroup.appendChild(editButton);
     }
-    updateEditButtonVisibility(editButton);
+    updateEditingButtonVisibility(editButton);
+}
+
+function addDuplicateButton(kvRoot) {
+    if (!kvRoot || !kvRoot.loader || !kvRoot.loader.parentLoader) return;
+    const duplicateButton = newIconButton("C");
+    duplicateButton.classList.add("duplicate-button");
+    duplicateButton.title = "Duplicate item";
+    duplicateButton.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        handleDuplicateNode(kvRoot);
+    });
+    const buttonGroup = ensureButtonGroup(kvRoot);
+    buttonGroup.appendChild(duplicateButton);
+    updateEditingButtonVisibility(duplicateButton);
+}
+
+function addDeleteButton(kvRoot) {
+    if (!kvRoot || !kvRoot.loader || !kvRoot.loader.parentLoader) return;
+    const deleteButton = newIconButton("D");
+    deleteButton.classList.add("delete-button");
+    deleteButton.title = "Delete item";
+    deleteButton.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        handleDeleteNode(kvRoot);
+    });
+    const buttonGroup = ensureButtonGroup(kvRoot);
+    buttonGroup.appendChild(deleteButton);
+    updateEditingButtonVisibility(deleteButton);
+}
+
+function addNodeActionButtons(kvRoot) {
+    if (!kvRoot || !kvRoot.loader || !kvRoot.loader.parentLoader) return;
+    addDuplicateButton(kvRoot);
+    addDeleteButton(kvRoot);
 }
 
 function openPropertyEditor(kvRoot) {
@@ -1153,15 +1188,15 @@ function handleValueChanged(loader, options = {}) {
     }
 }
 
-function updateEditButtonVisibility(button) {
+function updateEditingButtonVisibility(button) {
     if (!button) return;
     button.style.display = g_editingEnabled ? "" : "none";
 }
 
 function setEditingEnabled(isEnabled) {
     g_editingEnabled = isEnabled;
-    document.querySelectorAll(".edit-button").forEach(button => {
-        updateEditButtonVisibility(button);
+    document.querySelectorAll(".edit-button, .duplicate-button, .delete-button").forEach(button => {
+        updateEditingButtonVisibility(button);
     });
 }
 
@@ -1492,6 +1527,108 @@ let downloadJsonButton = null;
 let downloadJsonlButton = null;
 
 updateTopLevelNavigator();
+
+function rerenderCurrentRoot(options = {}) {
+    if (!g_currentRootLoader) return;
+    const view = document.querySelector("#view");
+    if (view) {
+        view.replaceChildren();
+    }
+    renderJSON(g_currentRootLoader);
+}
+
+function cloneJsonValue(value) {
+    if (typeof structuredClone === "function") {
+        try {
+            return structuredClone(value);
+        }
+        catch (error) {
+            console.warn("structuredClone failed, falling back to JSON clone", error);
+        }
+    }
+    try {
+        return JSON.parse(JSON.stringify(value));
+    }
+    catch (error) {
+        console.warn("Failed to clone value", error);
+        return value;
+    }
+}
+
+function deleteLoaderChild(loader) {
+    if (!loader || !loader.parentLoader) return false;
+    const parent = loader.parentLoader;
+    const parentValue = parent.getValue();
+    if (Array.isArray(parentValue)) {
+        const index = Number(loader.parentKey);
+        if (!Number.isInteger(index)) return false;
+        parentValue.splice(index, 1);
+        return true;
+    }
+    if (parentValue && typeof parentValue === "object") {
+        if (!Object.prototype.hasOwnProperty.call(parentValue, loader.parentKey)) return false;
+        delete parentValue[loader.parentKey];
+        return true;
+    }
+    return false;
+}
+
+function duplicateLoaderChild(loader) {
+    if (!loader || !loader.parentLoader) return false;
+    const parent = loader.parentLoader;
+    const parentValue = parent.getValue();
+    const clone = cloneJsonValue(loader.getValue());
+    if (Array.isArray(parentValue)) {
+        const index = Number(loader.parentKey);
+        if (!Number.isInteger(index)) return false;
+        parentValue.splice(index + 1, 0, clone);
+        return true;
+    }
+    if (parentValue && typeof parentValue === "object") {
+        const baseKey = loader.parentKey != null ? loader.parentKey.toString() : "copy";
+        let candidate = `${baseKey}_copy`;
+        let counter = 1;
+        while (Object.prototype.hasOwnProperty.call(parentValue, candidate)) {
+            counter += 1;
+            candidate = `${baseKey}_copy${counter}`;
+        }
+        parentValue[candidate] = clone;
+        return true;
+    }
+    return false;
+}
+
+function handleDeleteNode(kvRoot) {
+    if (!g_editingEnabled || !kvRoot || !kvRoot.loader) return;
+    const loader = kvRoot.loader;
+    if (!loader.parentLoader) {
+        alert("Cannot delete the root item.");
+        return;
+    }
+    const deleted = deleteLoaderChild(loader);
+    if (!deleted) {
+        alert("Unable to delete this item.");
+        return;
+    }
+    handleValueChanged(loader.parentLoader, { skipSearchRefresh: true });
+    rerenderCurrentRoot();
+}
+
+function handleDuplicateNode(kvRoot) {
+    if (!g_editingEnabled || !kvRoot || !kvRoot.loader) return;
+    const loader = kvRoot.loader;
+    if (!loader.parentLoader) {
+        alert("Cannot duplicate the root item.");
+        return;
+    }
+    const duplicated = duplicateLoaderChild(loader);
+    if (!duplicated) {
+        alert("Unable to duplicate this item.");
+        return;
+    }
+    handleValueChanged(loader.parentLoader, { skipSearchRefresh: true });
+    rerenderCurrentRoot();
+}
 
 function setCurrentRootLoader(loader, mode) {
     g_currentRootLoader = loader;
