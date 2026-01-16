@@ -764,14 +764,14 @@ function performSearch() {
         return;
     }
 
-    const matcher = buildSearchMatcher(query, searchState.isRegex);
-    if (!matcher) {
+    const pattern = buildSearchPattern(query, searchState.isRegex);
+    if (!pattern) {
         updateSearchControls();
         return;
     }
 
     const rootValue = g_currentRootLoader.getValue();
-    collectSearchMatches(rootValue, [], matcher);
+    collectSearchMatches(rootValue, [], pattern);
 
     if (searchState.matches.length === 0) {
         searchState.lastFocusedPath = null;
@@ -787,57 +787,149 @@ function performSearch() {
     focusSearchResultByIndex(focusIndex);
 }
 
-function buildSearchMatcher(query, isRegex) {
+function buildSearchPattern(query, isRegex) {
+    if (!query) return null;
     if (isRegex) {
         try {
-            const regex = new RegExp(query, "i");
-            return (text) => regex.test((text ?? "").toString());
+            // Compile once to validate the pattern; separate helper builds the actual regex per use.
+            // eslint-disable-next-line no-new
+            new RegExp(query, "i");
         }
         catch (error) {
             searchState.error = error.message;
             return null;
         }
+        return {
+            mode: "regex",
+            source: query,
+            collectMatches(text) {
+                const target = (text ?? "").toString();
+                if (!target) return [];
+                const regex = new RegExp(query, "gi");
+                const matches = [];
+                let occurrenceIndex = 0;
+                let match;
+                while ((match = regex.exec(target)) !== null) {
+                    matches.push({
+                        index: match.index,
+                        length: match[0].length,
+                        text: match[0],
+                        groups: match.slice(1),
+                        groupsObject: match.groups || null,
+                        occurrenceIndex
+                    });
+                    occurrenceIndex += 1;
+                    if (match.index === regex.lastIndex) {
+                        regex.lastIndex += 1;
+                    }
+                }
+                return matches;
+            },
+            buildRegex(globalFlag) {
+                return new RegExp(query, globalFlag ? "gi" : "i");
+            }
+        };
     }
     const needle = query.toLowerCase();
-    return (text) => (text ?? "").toString().toLowerCase().includes(needle);
+    return {
+        mode: "text",
+        source: query,
+        collectMatches(text) {
+            const target = (text ?? "").toString();
+            if (!target || !needle) return [];
+            const lower = target.toLowerCase();
+            const matches = [];
+            const step = Math.max(query.length, 1);
+            let occurrenceIndex = 0;
+            let startIndex = 0;
+            while (needle && (startIndex = lower.indexOf(needle, startIndex)) !== -1) {
+                matches.push({
+                    index: startIndex,
+                    length: query.length,
+                    text: target.substr(startIndex, query.length),
+                    groups: [],
+                    groupsObject: null,
+                    occurrenceIndex
+                });
+                occurrenceIndex += 1;
+                startIndex += step;
+            }
+            return matches;
+        },
+        buildRegex(globalFlag) {
+            const escaped = escapeRegExp(query);
+            return new RegExp(escaped, globalFlag ? "gi" : "i");
+        }
+    };
 }
 
-function collectSearchMatches(value, path, matcher) {
+function collectSearchMatches(value, path, pattern) {
     if (Array.isArray(value)) {
         value.forEach((item, index) => {
-            evaluateSearchNode(path, index, item, matcher);
+            evaluateSearchNode(path, index, item, pattern);
         });
         return;
     }
     if (value && typeof value === "object") {
         Object.entries(value).forEach(([key, childValue]) => {
-            evaluateSearchNode(path, key, childValue, matcher);
+            evaluateSearchNode(path, key, childValue, pattern);
         });
         return;
     }
 
     const primitiveText = formatValueForSearch(value);
-    if (matcher(primitiveText)) {
-        searchState.matches.push({ path: [...path], matchSource: "value", snippet: primitiveText });
-    }
+    pushValueMatches(path, primitiveText, pattern);
 }
 
-function evaluateSearchNode(path, key, value, matcher) {
+function evaluateSearchNode(path, key, value, pattern) {
     const nextPath = [...path, key];
     const keyText = keyToSearchString(key);
     const rawKeyText = typeof key === "string" ? key : (typeof key === "number" ? key.toString() : "");
-    if ((keyText && matcher(keyText)) || (rawKeyText && matcher(rawKeyText))) {
-        searchState.matches.push({ path: nextPath, matchSource: "key", snippet: rawKeyText || keyText });
-    }
+    pushKeyMatches(nextPath, keyText, rawKeyText, pattern);
     if (isPrimitiveValue(value)) {
         const valueText = formatValueForSearch(value);
-        if (matcher(valueText)) {
-            searchState.matches.push({ path: nextPath, matchSource: "value", snippet: valueText });
-        }
+        pushValueMatches(nextPath, valueText, pattern);
     }
     if (value && typeof value === "object") {
-        collectSearchMatches(value, nextPath, matcher);
+        collectSearchMatches(value, nextPath, pattern);
     }
+}
+
+function pushKeyMatches(path, keyText, rawKeyText, pattern) {
+    const sourceText = rawKeyText || keyText || "";
+    if (!sourceText || !pattern || typeof pattern.collectMatches !== "function") return;
+    const matches = pattern.collectMatches(sourceText);
+    matches.forEach((info) => {
+        searchState.matches.push({
+            path: [...path],
+            matchSource: "key",
+            snippet: sourceText,
+            matchIndex: info.index,
+            matchLength: info.length,
+            occurrenceIndex: info.occurrenceIndex,
+            groups: info.groups || [],
+            groupsObject: info.groupsObject || null,
+            matchedText: info.text
+        });
+    });
+}
+
+function pushValueMatches(path, valueText, pattern) {
+    if (valueText == null || !pattern || typeof pattern.collectMatches !== "function") return;
+    const matches = pattern.collectMatches(valueText);
+    matches.forEach((info) => {
+        searchState.matches.push({
+            path: [...path],
+            matchSource: "value",
+            snippet: valueText,
+            matchIndex: info.index,
+            matchLength: info.length,
+            occurrenceIndex: info.occurrenceIndex,
+            groups: info.groups || [],
+            groupsObject: info.groupsObject || null,
+            matchedText: info.text
+        });
+    });
 }
 
 function keyToSearchString(key) {
@@ -889,7 +981,13 @@ async function focusSearchResultByIndex(index) {
         target.scrollIntoView();
     }
     searchState.currentIndex = index;
-    searchState.lastFocusedPath = match ? { path: clonePath(match.path), source: match.matchSource } : null;
+    searchState.lastFocusedPath = match
+        ? {
+            path: clonePath(match.path),
+            source: match.matchSource,
+            occurrenceIndex: typeof match.occurrenceIndex === "number" ? match.occurrenceIndex : null
+        }
+        : null;
     updateSearchControls();
 }
 
@@ -902,6 +1000,10 @@ function findMatchIndexByPath(targetInfo) {
     for (let i = 0; i < searchState.matches.length; i++) {
         const match = searchState.matches[i];
         if (match.matchSource === targetInfo.source && pathsEqual(match.path, targetInfo.path)) {
+            const hasOccurrence = typeof targetInfo.occurrenceIndex === "number";
+            if (hasOccurrence && typeof match.occurrenceIndex === "number" && match.occurrenceIndex !== targetInfo.occurrenceIndex) {
+                continue;
+            }
             return i;
         }
     }
@@ -1051,18 +1153,42 @@ function clearMatchHighlight() {
     searchState.highlightInfo = null;
 }
 
-function applyTextHighlight(element) {
+function applyTextHighlight(element, matchDetails) {
     if (!element) return;
-    const regex = getSearchRegex(false);
-    if (!regex) return;
-    const text = element.textContent;
+    const text = element.textContent ?? "";
     if (!text) return;
+    const regex = getSearchRegex(true);
+    if (!regex) return;
+    const targetOccurrence = matchDetails && typeof matchDetails.occurrenceIndex === "number"
+        ? matchDetails.occurrenceIndex
+        : 0;
+    let occurrence = 0;
+    let highlightMatch = null;
+    let execResult;
     regex.lastIndex = 0;
-    const match = regex.exec(text);
-    if (!match) return;
-    const before = text.slice(0, match.index);
-    const matchText = match[0];
-    const after = text.slice(match.index + matchText.length);
+    while ((execResult = regex.exec(text)) !== null) {
+        if (occurrence === targetOccurrence) {
+            highlightMatch = execResult;
+            break;
+        }
+        occurrence += 1;
+        if (!regex.global) {
+            break;
+        }
+        if (execResult.index === regex.lastIndex) {
+            regex.lastIndex += 1;
+        }
+    }
+    if (!highlightMatch) {
+        regex.lastIndex = 0;
+        highlightMatch = regex.exec(text);
+        if (!highlightMatch) return;
+    }
+    const matchStart = highlightMatch.index;
+    const matchText = highlightMatch[0] ?? "";
+    if (matchStart == null || matchStart < 0 || !matchText) return;
+    const before = text.slice(0, matchStart);
+    const after = text.slice(matchStart + matchText.length);
     searchState.highlightInfo = {
         element,
         originalHtml: element.innerHTML
@@ -1081,7 +1207,7 @@ function highlightMatchInKv(kvRoot, match) {
         targetElement = kvRoot.querySelector(".json-value");
     }
     if (targetElement) {
-        applyTextHighlight(targetElement);
+        applyTextHighlight(targetElement, match);
     }
 }
 
@@ -1107,6 +1233,14 @@ function getReplaceText() {
     return replaceInput.value ?? "";
 }
 
+function getReplacementTextForRegexEngine() {
+    const raw = getReplaceText();
+    if (searchState.isRegex) {
+        return raw;
+    }
+    return raw.replace(/\$/g, "$$$$");
+}
+
 function escapeRegExp(str) {
     return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -1115,16 +1249,22 @@ function buildReplacementRegex(replaceAllOccurrences) {
     return getSearchRegex(replaceAllOccurrences, { reportError: true });
 }
 
-async function replaceValueAtPath(path, replaceAllOccurrences) {
-    const regex = buildReplacementRegex(replaceAllOccurrences);
-    if (!regex) return false;
+async function replaceValueAtPath(path, replaceAllOccurrences, matchDetails = null) {
     const kvRoot = await ensurePathRendered(path);
     if (!kvRoot || !kvRoot.loader) return false;
     const loader = kvRoot.loader;
     const currentValue = loader.getValue();
     if (typeof currentValue !== "string") return false;
-    const replacementText = getReplaceText();
-    const newValue = currentValue.replace(regex, replacementText);
+    let newValue;
+    if (!replaceAllOccurrences && canUseMatchDetails(matchDetails)) {
+        newValue = replaceUsingMatchDetails(currentValue, matchDetails);
+    }
+    else {
+        const regex = buildReplacementRegex(true);
+        if (!regex) return false;
+        const replacementText = getReplacementTextForRegexEngine();
+        newValue = currentValue.replace(regex, replacementText);
+    }
     if (newValue === currentValue) return false;
     if (typeof loader.updateValue === "function") {
         loader.updateValue(newValue);
@@ -1150,13 +1290,23 @@ async function replaceCurrentMatch(advanceToNext) {
         return;
     }
     const currentPath = clonePath(currentMatch.path);
-    const replaced = await replaceValueAtPath(currentPath, false);
+    const replaced = await replaceValueAtPath(currentPath, false, currentMatch);
     if (!replaced) return;
     recordReplaceHistoryValue(getReplaceText());
-    let desiredInfo = { path: currentPath, source: "value" };
+    let desiredInfo = {
+        path: currentPath,
+        source: "value",
+        occurrenceIndex: typeof currentMatch.occurrenceIndex === "number" ? currentMatch.occurrenceIndex : null
+    };
     if (advanceToNext) {
         const nextMatch = searchState.matches[searchState.currentIndex + 1];
-        desiredInfo = nextMatch ? { path: clonePath(nextMatch.path), source: nextMatch.matchSource } : null;
+        desiredInfo = nextMatch
+            ? {
+                path: clonePath(nextMatch.path),
+                source: nextMatch.matchSource,
+                occurrenceIndex: typeof nextMatch.occurrenceIndex === "number" ? nextMatch.occurrenceIndex : null
+            }
+            : null;
     }
     searchState.lastFocusedPath = desiredInfo;
     performSearch();
@@ -1164,10 +1314,17 @@ async function replaceCurrentMatch(advanceToNext) {
 
 async function replaceAllMatches() {
     if (!canPerformReplacement()) return;
+    const pathKeys = new Set();
     const matchPaths = searchState.matches
         .filter(match => match.matchSource === "value")
         .map(match => clonePath(match.path))
-        .filter(Boolean);
+        .filter(Boolean)
+        .filter((path) => {
+            const key = JSON.stringify(path);
+            if (pathKeys.has(key)) return false;
+            pathKeys.add(key);
+            return true;
+        });
     let replacedAny = false;
     for (const path of matchPaths) {
         const replaced = await replaceValueAtPath(path, true);
@@ -1180,6 +1337,86 @@ async function replaceAllMatches() {
     }
     searchState.lastFocusedPath = null;
     performSearch();
+}
+
+function canUseMatchDetails(details) {
+    return !!details
+        && typeof details.matchIndex === "number"
+        && typeof details.matchLength === "number"
+        && details.matchIndex >= 0;
+}
+
+function replaceUsingMatchDetails(currentValue, matchDetails) {
+    if (!canUseMatchDetails(matchDetails)) return currentValue;
+    const start = matchDetails.matchIndex;
+    const end = start + matchDetails.matchLength;
+    if (start > currentValue.length || end > currentValue.length) {
+        return currentValue;
+    }
+    const replacementSegment = buildReplacementSegment(matchDetails, currentValue);
+    return `${currentValue.slice(0, start)}${replacementSegment}${currentValue.slice(end)}`;
+}
+
+function buildReplacementSegment(matchDetails, inputText) {
+    const rawTemplate = getReplaceText();
+    if (!searchState.isRegex) {
+        return rawTemplate;
+    }
+    const matchText = getMatchedTextFromDetails(matchDetails, inputText);
+    const groups = Array.isArray(matchDetails.groups) ? matchDetails.groups : [];
+    const fakeMatch = [matchText, ...groups];
+    fakeMatch.index = typeof matchDetails.matchIndex === "number" ? matchDetails.matchIndex : 0;
+    fakeMatch.input = inputText;
+    fakeMatch.groups = matchDetails.groupsObject || {};
+    return applyReplacementTemplate(rawTemplate, fakeMatch, inputText);
+}
+
+function getMatchedTextFromDetails(matchDetails, inputText) {
+    if (matchDetails && typeof matchDetails.matchedText === "string") {
+        return matchDetails.matchedText;
+    }
+    const start = typeof matchDetails.matchIndex === "number" ? matchDetails.matchIndex : 0;
+    const length = typeof matchDetails.matchLength === "number" ? matchDetails.matchLength : 0;
+    return inputText.slice(start, start + length);
+}
+
+function applyReplacementTemplate(template, matchResult, inputText) {
+    if (template == null) return "";
+    const matchText = matchResult[0] ?? "";
+    const matchIndex = typeof matchResult.index === "number" ? matchResult.index : 0;
+    const namedGroups = matchResult.groups || {};
+    const groupCount = Math.max(matchResult.length - 1, 0);
+    return template.replace(/\$([$&`']|<[^>]+>|\d{1,2})/g, (full, token) => {
+        switch (token) {
+            case "$":
+                return "$";
+            case "&":
+                return matchText;
+            case "`":
+                return inputText.slice(0, matchIndex);
+            case "'":
+                return inputText.slice(matchIndex + matchText.length);
+            default:
+                if (token.startsWith("<") && token.endsWith(">")) {
+                    const name = token.slice(1, -1);
+                    return Object.prototype.hasOwnProperty.call(namedGroups, name) && namedGroups[name] != null
+                        ? namedGroups[name]
+                        : "";
+                }
+                const groupIndex = Number.parseInt(token, 10);
+                if (!Number.isNaN(groupIndex)) {
+                    if (groupIndex < 1) {
+                        return full;
+                    }
+                    if (groupIndex >= 1 && groupIndex <= groupCount) {
+                        const value = matchResult[groupIndex];
+                        return value != null ? value : "";
+                    }
+                    return "";
+                }
+                return full;
+        }
+    });
 }
 
 /*************************************
@@ -1414,6 +1651,9 @@ function openPropertyEditor(kvRoot) {
 function refreshRenderedString(kvRoot, newValue) {
     let jsonValue = kvRoot.querySelector(".kv .kv-text .json-value");
     if (jsonValue) {
+        if (searchState.highlightInfo && searchState.highlightInfo.element === jsonValue) {
+            searchState.highlightInfo = null;
+        }
         jsonValue.textContent = JSON.stringify(newValue);
     }
     let rawString = kvRoot.querySelector(".raw-string");
