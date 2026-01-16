@@ -4,6 +4,16 @@
 
 A JSON/JSONL viewer and editor designed for readability and practical editing workflows.
 
+## Getting Started
+
+No installation or dependencies required! Simply:
+
+1. Clone this repository (or download just the `docs` subdirectory)
+2. Open `docs/index.html` in your browser
+3. Start viewing and editing your JSON/JSONL files
+
+That's it—completely standalone and runs entirely in your browser.
+
 ## Key Features
 
 ### Multi-line String Display (Original)
