@@ -35,10 +35,52 @@ const propertyEditorState = {
     modalElement: document.querySelector("#property-editor-modal"),
     textarea: document.querySelector("#property-editor-input"),
     pathLabel: document.querySelector("#property-editor-path"),
+    positionLabel: document.querySelector("#property-editor-caret"),
     applyButton: document.querySelector("#property-editor-apply"),
     modal: null,
     currentKvRoot: null,
+    caretUpdateHandle: null,
 };
+
+function updatePropertyEditorCaretInfo() {
+    if (!propertyEditorState.textarea || !propertyEditorState.positionLabel) return;
+    const textarea = propertyEditorState.textarea;
+    const text = textarea.value ?? "";
+    let offset = typeof textarea.selectionStart === "number"
+        ? textarea.selectionStart
+        : text.length;
+    if (offset < 0) offset = 0;
+    if (offset > text.length) offset = text.length;
+    let line = 1;
+    let column = 1;
+    for (let i = 0; i < offset; i++) {
+        if (text[i] === "\n") {
+            line += 1;
+            column = 1;
+        }
+        else {
+            column += 1;
+        }
+    }
+    propertyEditorState.positionLabel.textContent = `Ln ${line}, Col ${column}`;
+}
+
+function schedulePropertyEditorCaretUpdate() {
+    if (propertyEditorState.caretUpdateHandle && typeof window !== "undefined" && typeof window.cancelAnimationFrame === "function") {
+        window.cancelAnimationFrame(propertyEditorState.caretUpdateHandle);
+        propertyEditorState.caretUpdateHandle = null;
+    }
+    const rafAvailable = typeof window !== "undefined" && typeof window.requestAnimationFrame === "function";
+    if (rafAvailable) {
+        propertyEditorState.caretUpdateHandle = window.requestAnimationFrame(() => {
+            propertyEditorState.caretUpdateHandle = null;
+            updatePropertyEditorCaretInfo();
+        });
+    }
+    else {
+        setTimeout(() => updatePropertyEditorCaretInfo(), 0);
+    }
+}
 
 if (propertyEditorState.modalElement) {
     propertyEditorState.modal = new bootstrap.Modal(propertyEditorState.modalElement);
@@ -46,9 +88,13 @@ if (propertyEditorState.modalElement) {
         if (!propertyEditorState.textarea) return;
         propertyEditorState.textarea.focus();
         propertyEditorState.textarea.select();
+        schedulePropertyEditorCaretUpdate();
     });
     propertyEditorState.modalElement.addEventListener("hidden.bs.modal", () => {
         propertyEditorState.currentKvRoot = null;
+        if (propertyEditorState.positionLabel) {
+            propertyEditorState.positionLabel.textContent = "Ln 1, Col 1";
+        }
     });
 }
 
@@ -68,6 +114,14 @@ if (propertyEditorState.applyButton) {
         if (propertyEditorState.modal) {
             propertyEditorState.modal.hide();
         }
+    });
+}
+
+if (propertyEditorState.textarea) {
+    ["input", "keyup", "mouseup", "click"].forEach((eventName) => {
+        propertyEditorState.textarea.addEventListener(eventName, () => {
+            schedulePropertyEditorCaretUpdate();
+        });
     });
 }
 
@@ -146,6 +200,75 @@ function requestSearchRefresh() {
         searchRefreshHandle = null;
         performSearch();
     }, 75);
+}
+
+function getLoaderPathSegments(loader) {
+    if (!loader) return [];
+    const segments = [];
+    let current = loader;
+    while (current && current.parentLoader) {
+        segments.unshift(current.parentKey);
+        current = current.parentLoader;
+    }
+    return segments;
+}
+
+function getCollapseWrapper(kvRoot) {
+    if (!kvRoot) return null;
+    for (const child of kvRoot.children) {
+        if (child.classList && child.classList.contains("collapse")) {
+            return child;
+        }
+    }
+    return null;
+}
+
+function captureExpandedPaths(rootLoader = null) {
+    const expanded = [];
+    document.querySelectorAll("#view .kv-root").forEach((kvRoot) => {
+        if (!kvRoot.loader) return;
+        if (rootLoader && !isLoaderDescendantOrSelf(kvRoot.loader, rootLoader)) return;
+        const collapseWrapper = getCollapseWrapper(kvRoot);
+        if (collapseWrapper && collapseWrapper.classList.contains("show")) {
+            const segments = getLoaderPathSegments(kvRoot.loader);
+            if (segments.length > 0) {
+                expanded.push(segments);
+            }
+        }
+    });
+    return expanded;
+}
+
+function isLoaderDescendantOrSelf(loader, ancestorCandidate) {
+    if (!loader || !ancestorCandidate) return false;
+    let current = loader;
+    while (current) {
+        if (current === ancestorCandidate) return true;
+        current = current.parentLoader;
+    }
+    return false;
+}
+
+async function restoreExpandedPaths(paths) {
+    if (!paths || !paths.length) return;
+    const tasks = paths
+        .filter((path) => Array.isArray(path) && path.length > 0)
+        .map(async (path) => {
+            try {
+                await ensurePathRendered(path);
+            }
+            catch (error) {
+                console.warn("Failed to restore expanded path", path, error);
+            }
+        });
+    await Promise.all(tasks);
+}
+
+async function focusPathSegments(pathSegments, highlightTopLevel = false) {
+    if (!Array.isArray(pathSegments)) return;
+    const kvRoot = await ensurePathRendered(pathSegments);
+    if (!kvRoot) return;
+    focusKvRoot(kvRoot, highlightTopLevel);
 }
 
 function setTopLevelError(message) {
@@ -1073,11 +1196,11 @@ function addEditButton(kvRoot) {
 function addDuplicateButton(kvRoot) {
     if (!kvRoot || !kvRoot.loader || !kvRoot.loader.parentLoader) return;
     const duplicateButton = newIconButton("C");
-    duplicateButton.classList.add("duplicate-button");
+    duplicateButton.classList.add("toggle-button", "duplicate-button");
     duplicateButton.title = "Duplicate item";
-    duplicateButton.addEventListener("click", (ev) => {
+    duplicateButton.addEventListener("click", async (ev) => {
         ev.stopPropagation();
-        handleDuplicateNode(kvRoot);
+        await handleDuplicateNode(kvRoot);
     });
     const buttonGroup = ensureButtonGroup(kvRoot);
     buttonGroup.appendChild(duplicateButton);
@@ -1087,11 +1210,11 @@ function addDuplicateButton(kvRoot) {
 function addDeleteButton(kvRoot) {
     if (!kvRoot || !kvRoot.loader || !kvRoot.loader.parentLoader) return;
     const deleteButton = newIconButton("D");
-    deleteButton.classList.add("delete-button");
+    deleteButton.classList.add("toggle-button", "delete-button");
     deleteButton.title = "Delete item";
-    deleteButton.addEventListener("click", (ev) => {
+    deleteButton.addEventListener("click", async (ev) => {
         ev.stopPropagation();
-        handleDeleteNode(kvRoot);
+        await handleDeleteNode(kvRoot);
     });
     const buttonGroup = ensureButtonGroup(kvRoot);
     buttonGroup.appendChild(deleteButton);
@@ -1111,6 +1234,7 @@ function openPropertyEditor(kvRoot) {
     const value = loader ? loader.getValue() : "";
     propertyEditorState.textarea.value = typeof value === "string" ? value : "";
     updatePropertyEditorPath(loader);
+    schedulePropertyEditorCaretUpdate();
     propertyEditorState.modal.show();
 }
 
@@ -1555,34 +1679,77 @@ function cloneJsonValue(value) {
     }
 }
 
+function confirmNodeAction(action) {
+    if (typeof window === "undefined" || typeof window.confirm !== "function") return true;
+    const actionVerb = action === "delete" ? "delete" : "duplicate";
+    return window.confirm(`Are you sure you want to ${actionVerb} this item?`);
+}
+
 function deleteLoaderChild(loader) {
-    if (!loader || !loader.parentLoader) return false;
+    if (!loader || !loader.parentLoader) return { success: false };
     const parent = loader.parentLoader;
     const parentValue = parent.getValue();
+    const parentPath = getLoaderPathSegments(parent);
     if (Array.isArray(parentValue)) {
         const index = Number(loader.parentKey);
-        if (!Number.isInteger(index)) return false;
+        if (!Number.isInteger(index)) return { success: false };
         parentValue.splice(index, 1);
-        return true;
+        let focusPath = null;
+        if (parentValue.length > 0) {
+            let focusIndex = index - 1;
+            if (focusIndex < 0) {
+                focusIndex = 0;
+            }
+            if (focusIndex >= parentValue.length) {
+                focusIndex = parentValue.length - 1;
+            }
+            if (focusIndex >= 0) {
+                focusPath = [...parentPath, focusIndex];
+            }
+        }
+        else {
+            focusPath = parentPath;
+        }
+        return { success: true, focusPath };
     }
     if (parentValue && typeof parentValue === "object") {
-        if (!Object.prototype.hasOwnProperty.call(parentValue, loader.parentKey)) return false;
+        if (!Object.prototype.hasOwnProperty.call(parentValue, loader.parentKey)) {
+            return { success: false };
+        }
+        const keysBefore = Object.keys(parentValue);
+        const currentIndex = keysBefore.indexOf(loader.parentKey);
         delete parentValue[loader.parentKey];
-        return true;
+        const remainingKeys = keysBefore.filter((key) => key !== loader.parentKey);
+        let focusPath = parentPath;
+        if (remainingKeys.length > 0) {
+            let focusKey = null;
+            if (currentIndex > 0) {
+                focusKey = keysBefore[currentIndex - 1];
+            }
+            else {
+                focusKey = remainingKeys[0];
+            }
+            if (focusKey != null) {
+                focusPath = [...parentPath, focusKey];
+            }
+        }
+        return { success: true, focusPath };
     }
-    return false;
+    return { success: false };
 }
 
 function duplicateLoaderChild(loader) {
-    if (!loader || !loader.parentLoader) return false;
+    if (!loader || !loader.parentLoader) return { success: false };
     const parent = loader.parentLoader;
     const parentValue = parent.getValue();
+    const parentPath = getLoaderPathSegments(parent);
     const clone = cloneJsonValue(loader.getValue());
     if (Array.isArray(parentValue)) {
         const index = Number(loader.parentKey);
-        if (!Number.isInteger(index)) return false;
-        parentValue.splice(index + 1, 0, clone);
-        return true;
+        if (!Number.isInteger(index)) return { success: false };
+        const newIndex = index + 1;
+        parentValue.splice(newIndex, 0, clone);
+        return { success: true, newPath: [...parentPath, newIndex] };
     }
     if (parentValue && typeof parentValue === "object") {
         const baseKey = loader.parentKey != null ? loader.parentKey.toString() : "copy";
@@ -1593,41 +1760,59 @@ function duplicateLoaderChild(loader) {
             candidate = `${baseKey}_copy${counter}`;
         }
         parentValue[candidate] = clone;
-        return true;
+        return { success: true, newPath: [...parentPath, candidate] };
     }
-    return false;
+    return { success: false };
 }
 
-function handleDeleteNode(kvRoot) {
+async function handleDeleteNode(kvRoot) {
     if (!g_editingEnabled || !kvRoot || !kvRoot.loader) return;
     const loader = kvRoot.loader;
     if (!loader.parentLoader) {
         alert("Cannot delete the root item.");
         return;
     }
-    const deleted = deleteLoaderChild(loader);
-    if (!deleted) {
+    if (!confirmNodeAction("delete")) {
+        return;
+    }
+    const parentLoader = loader.parentLoader;
+    const expandedPaths = captureExpandedPaths();
+    const result = deleteLoaderChild(loader);
+    if (!result.success) {
         alert("Unable to delete this item.");
         return;
     }
-    handleValueChanged(loader.parentLoader, { skipSearchRefresh: true });
+    handleValueChanged(parentLoader, { skipSearchRefresh: true });
     rerenderCurrentRoot();
+    await restoreExpandedPaths(expandedPaths);
+    if (result.focusPath) {
+        await focusPathSegments(result.focusPath, true);
+    }
 }
 
-function handleDuplicateNode(kvRoot) {
+async function handleDuplicateNode(kvRoot) {
     if (!g_editingEnabled || !kvRoot || !kvRoot.loader) return;
     const loader = kvRoot.loader;
     if (!loader.parentLoader) {
         alert("Cannot duplicate the root item.");
         return;
     }
-    const duplicated = duplicateLoaderChild(loader);
-    if (!duplicated) {
+    if (!confirmNodeAction("duplicate")) {
+        return;
+    }
+    const parentLoader = loader.parentLoader;
+    const expandedPaths = captureExpandedPaths();
+    const result = duplicateLoaderChild(loader);
+    if (!result.success) {
         alert("Unable to duplicate this item.");
         return;
     }
-    handleValueChanged(loader.parentLoader, { skipSearchRefresh: true });
+    handleValueChanged(parentLoader, { skipSearchRefresh: true });
     rerenderCurrentRoot();
+    await restoreExpandedPaths(expandedPaths);
+    if (result.newPath) {
+        await focusPathSegments(result.newPath, true);
+    }
 }
 
 function setCurrentRootLoader(loader, mode) {
