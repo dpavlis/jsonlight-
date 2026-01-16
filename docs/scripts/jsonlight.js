@@ -55,6 +55,79 @@ const propertyEditorSearchState = {
     lastDirection: 1,
 };
 
+const propertyEditorDragState = {
+    dialog: null,
+    header: null,
+    dragging: false,
+    lastX: 0,
+    lastY: 0,
+    currentX: 0,
+    currentY: 0,
+    initialized: false
+};
+
+function initializePropertyEditorDragSupport() {
+    if (propertyEditorDragState.initialized || !propertyEditorState.modalElement) return;
+    const dialog = propertyEditorState.modalElement.querySelector(".modal-dialog");
+    const header = propertyEditorState.modalElement.querySelector(".modal-header");
+    if (!dialog || !header) return;
+    propertyEditorDragState.dialog = dialog;
+    propertyEditorDragState.header = header;
+    header.style.cursor = "move";
+    header.addEventListener("mousedown", handlePropertyEditorDragStart);
+    propertyEditorState.modalElement.addEventListener("shown.bs.modal", resetPropertyEditorDragPosition);
+    propertyEditorState.modalElement.addEventListener("hidden.bs.modal", resetPropertyEditorDragPosition);
+    propertyEditorDragState.initialized = true;
+}
+
+function handlePropertyEditorDragStart(event) {
+    if (event.button !== 0) return;
+    if (!propertyEditorDragState.dialog) return;
+    if (!propertyEditorState.modalElement || !propertyEditorState.modalElement.classList.contains("show")) return;
+    propertyEditorDragState.dragging = true;
+    propertyEditorDragState.lastX = event.clientX;
+    propertyEditorDragState.lastY = event.clientY;
+    document.addEventListener("mousemove", handlePropertyEditorDragMove);
+    document.addEventListener("mouseup", handlePropertyEditorDragEnd);
+    event.preventDefault();
+}
+
+function handlePropertyEditorDragMove(event) {
+    if (!propertyEditorDragState.dragging) return;
+    const deltaX = event.clientX - propertyEditorDragState.lastX;
+    const deltaY = event.clientY - propertyEditorDragState.lastY;
+    propertyEditorDragState.lastX = event.clientX;
+    propertyEditorDragState.lastY = event.clientY;
+    propertyEditorDragState.currentX += deltaX;
+    propertyEditorDragState.currentY += deltaY;
+    applyPropertyEditorDragTransform();
+}
+
+function handlePropertyEditorDragEnd() {
+    if (!propertyEditorDragState.dragging) return;
+    propertyEditorDragState.dragging = false;
+    document.removeEventListener("mousemove", handlePropertyEditorDragMove);
+    document.removeEventListener("mouseup", handlePropertyEditorDragEnd);
+}
+
+function applyPropertyEditorDragTransform() {
+    if (!propertyEditorDragState.dialog) return;
+    propertyEditorDragState.dialog.style.transform = `translate(${propertyEditorDragState.currentX}px, ${propertyEditorDragState.currentY}px)`;
+}
+
+function resetPropertyEditorDragPosition() {
+    propertyEditorDragState.currentX = 0;
+    propertyEditorDragState.currentY = 0;
+    if (propertyEditorDragState.dialog) {
+        propertyEditorDragState.dialog.style.transform = "";
+    }
+    if (propertyEditorDragState.dragging) {
+        propertyEditorDragState.dragging = false;
+        document.removeEventListener("mousemove", handlePropertyEditorDragMove);
+        document.removeEventListener("mouseup", handlePropertyEditorDragEnd);
+    }
+}
+
 function getLineAndColumnForOffset(text, offset) {
     let line = 1;
     let column = 1;
@@ -243,6 +316,8 @@ if (propertyEditorState.modalElement) {
         setPropertyEditorSearchStatus("", "info");
     });
 }
+
+initializePropertyEditorDragSupport();
 
 if (propertyEditorState.applyButton) {
     propertyEditorState.applyButton.addEventListener("click", () => {
@@ -2039,6 +2114,7 @@ function updateFileNameDisplay(fileName) {
         fileNameElement.textContent = fileName;
         fileNameElement.title = fileName; // Show full name on hover
         fileNameElement.style.display = "block";
+        lastLoadedFileName = fileName;
     } else {
         fileNameElement.textContent = "No file selected";
         fileNameElement.title = "";
@@ -2144,6 +2220,7 @@ let fileOperationMode = FILE_MODE_JSON;
 let downloadDataButton = null;
 let filePicker = null;
 let fileModeInputs = [];
+let lastLoadedFileName = "";
 const THEME_LIGHT = "light";
 const THEME_DARK = "dark";
 const THEME_STORAGE_KEY = "jsonlight.themePreference";
@@ -2350,7 +2427,7 @@ function getJsonlText() {
 }
 
 function promptFileName(format) {
-    let suggestedName = format === "jsonl" ? "data.jsonl" : "data.json";
+    const suggestedName = getSuggestedFileName(format);
     if (typeof window === "undefined" || typeof window.prompt !== "function") {
         return suggestedName;
     }
@@ -2360,11 +2437,32 @@ function promptFileName(format) {
     if (!trimmed) {
         trimmed = suggestedName;
     }
-    let extension = format === "jsonl" ? ".jsonl" : ".json";
-    if (!trimmed.toLowerCase().endsWith(extension)) {
-        trimmed += extension;
-    }
+    trimmed = ensureFileExtension(trimmed, format);
+    lastLoadedFileName = trimmed;
     return trimmed;
+}
+
+function getSuggestedFileName(format) {
+    const extension = format === "jsonl" ? ".jsonl" : ".json";
+    const defaultBase = "data";
+    if (lastLoadedFileName) {
+        const cleaned = lastLoadedFileName.trim();
+        if (cleaned) {
+            const base = cleaned.replace(/\.[^./\\]+$/, "") || cleaned;
+            return `${base}${extension}`;
+        }
+    }
+    return `${defaultBase}${extension}`;
+}
+
+function ensureFileExtension(fileName, format) {
+    const extension = format === "jsonl" ? ".jsonl" : ".json";
+    const cleaned = fileName.trim();
+    if (!cleaned.toLowerCase().endsWith(extension)) {
+        const base = cleaned.replace(/\.[^./\\]+$/, "") || cleaned;
+        return `${base}${extension}`;
+    }
+    return cleaned;
 }
 
 async function handleSaveRequest(format) {
