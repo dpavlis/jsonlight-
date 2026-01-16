@@ -16,7 +16,7 @@ A JSON/JSONL viewer and editor designed for readability and practical editing wo
 ## Getting Started
 
 ### Option 1: Use Online (Easiest)
-Just visit **[https://dpavlis.github.io/jsonlight-/](https://dpavlis.github.io/jsonlight-/)** in your browser—no installation needed!
+Just visit **[https://dpavlis.github.io/jsonlight_plus/](https://dpavlis.github.io/jsonlight_plus/)** in your browser—no installation needed!
 
 ### Option 2: Run Locally
 1. Clone this repository (or download just the `docs` subdirectory)
