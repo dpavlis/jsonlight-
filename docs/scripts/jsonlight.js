@@ -36,11 +36,39 @@ const propertyEditorState = {
     textarea: document.querySelector("#property-editor-input"),
     pathLabel: document.querySelector("#property-editor-path"),
     positionLabel: document.querySelector("#property-editor-caret"),
+    searchInput: document.querySelector("#property-editor-search-input"),
+    searchPrevButton: document.querySelector("#property-editor-find-prev"),
+    searchNextButton: document.querySelector("#property-editor-find-next"),
+    replaceInput: document.querySelector("#property-editor-replace-input"),
+    replaceButton: document.querySelector("#property-editor-replace-current"),
+    replaceAllButton: document.querySelector("#property-editor-replace-all"),
+    searchStatusLabel: document.querySelector("#property-editor-search-status"),
+    searchErrorLabel: document.querySelector("#property-editor-search-error"),
     applyButton: document.querySelector("#property-editor-apply"),
     modal: null,
     currentKvRoot: null,
     caretUpdateHandle: null,
 };
+
+const propertyEditorSearchState = {
+    lastQuery: "",
+    lastDirection: 1,
+};
+
+function getLineAndColumnForOffset(text, offset) {
+    let line = 1;
+    let column = 1;
+    for (let i = 0; i < offset && i < text.length; i++) {
+        if (text[i] === "\n") {
+            line += 1;
+            column = 1;
+        }
+        else {
+            column += 1;
+        }
+    }
+    return { line, column };
+}
 
 function updatePropertyEditorCaretInfo() {
     if (!propertyEditorState.textarea || !propertyEditorState.positionLabel) return;
@@ -51,17 +79,7 @@ function updatePropertyEditorCaretInfo() {
         : text.length;
     if (offset < 0) offset = 0;
     if (offset > text.length) offset = text.length;
-    let line = 1;
-    let column = 1;
-    for (let i = 0; i < offset; i++) {
-        if (text[i] === "\n") {
-            line += 1;
-            column = 1;
-        }
-        else {
-            column += 1;
-        }
-    }
+    const { line, column } = getLineAndColumnForOffset(text, offset);
     propertyEditorState.positionLabel.textContent = `Ln ${line}, Col ${column}`;
 }
 
@@ -82,6 +100,130 @@ function schedulePropertyEditorCaretUpdate() {
     }
 }
 
+function updatePropertyEditorSearchControls() {
+    const hasQuery = !!(propertyEditorState.searchInput && propertyEditorState.searchInput.value);
+    if (propertyEditorState.searchPrevButton) propertyEditorState.searchPrevButton.disabled = !hasQuery;
+    if (propertyEditorState.searchNextButton) propertyEditorState.searchNextButton.disabled = !hasQuery;
+    if (propertyEditorState.replaceButton) propertyEditorState.replaceButton.disabled = !hasQuery;
+    if (propertyEditorState.replaceAllButton) propertyEditorState.replaceAllButton.disabled = !hasQuery;
+    if (!hasQuery) {
+        setPropertyEditorSearchStatus("", "info");
+    }
+}
+
+function setPropertyEditorSearchStatus(message, type = "info") {
+    if (propertyEditorState.searchStatusLabel) {
+        propertyEditorState.searchStatusLabel.textContent = type === "info" ? message : "";
+    }
+    if (propertyEditorState.searchErrorLabel) {
+        propertyEditorState.searchErrorLabel.textContent = type === "error" ? message : "";
+    }
+}
+
+function getPropertyEditorSearchQuery() {
+    return propertyEditorState.searchInput ? propertyEditorState.searchInput.value : "";
+}
+
+function getPropertyEditorReplaceText() {
+    return propertyEditorState.replaceInput ? propertyEditorState.replaceInput.value : "";
+}
+
+function selectPropertyEditorRange(start, end) {
+    if (!propertyEditorState.textarea) return;
+    propertyEditorState.textarea.focus();
+    propertyEditorState.textarea.setSelectionRange(start, end);
+    schedulePropertyEditorCaretUpdate();
+}
+
+function handlePropertyEditorFind(direction) {
+    if (!propertyEditorState.textarea) return;
+    const query = getPropertyEditorSearchQuery();
+    if (!query) {
+        setPropertyEditorSearchStatus("Enter text to find.", "error");
+        return;
+    }
+    const text = propertyEditorState.textarea.value ?? "";
+    if (!text) {
+        setPropertyEditorSearchStatus("Editor is empty.", "error");
+        return;
+    }
+    const contentLength = text.length;
+    const selStart = propertyEditorState.textarea.selectionStart ?? 0;
+    const selEnd = propertyEditorState.textarea.selectionEnd ?? 0;
+    let searchStart;
+    let index = -1;
+    if (direction >= 0) {
+        searchStart = Math.max(selEnd, 0);
+        index = text.indexOf(query, searchStart);
+        if (index === -1 && searchStart > 0) {
+            index = text.indexOf(query, 0);
+        }
+    }
+    else {
+        searchStart = Math.max(selStart - 1, 0);
+        index = text.lastIndexOf(query, searchStart);
+        if (index === -1 && searchStart < contentLength) {
+            index = text.lastIndexOf(query, contentLength);
+        }
+    }
+    if (index === -1) {
+        setPropertyEditorSearchStatus("No matches.", "error");
+        return;
+    }
+    selectPropertyEditorRange(index, index + query.length);
+    propertyEditorSearchState.lastQuery = query;
+    propertyEditorSearchState.lastDirection = direction;
+    const { line, column } = getLineAndColumnForOffset(text, index);
+    setPropertyEditorSearchStatus(`Match at Ln ${line}, Col ${column}`, "info");
+}
+
+function handlePropertyEditorReplaceCurrent() {
+    if (!propertyEditorState.textarea) return;
+    const query = getPropertyEditorSearchQuery();
+    if (!query) {
+        setPropertyEditorSearchStatus("Enter text to find before replacing.", "error");
+        return;
+    }
+    const selection = propertyEditorState.textarea.value.substring(
+        propertyEditorState.textarea.selectionStart ?? 0,
+        propertyEditorState.textarea.selectionEnd ?? 0
+    );
+    if (selection !== query) {
+        handlePropertyEditorFind(propertyEditorSearchState.lastDirection >= 0 ? 1 : -1);
+        return;
+    }
+    const replacement = getPropertyEditorReplaceText();
+    propertyEditorState.textarea.setRangeText(
+        replacement,
+        propertyEditorState.textarea.selectionStart,
+        propertyEditorState.textarea.selectionEnd,
+        "end"
+    );
+    schedulePropertyEditorCaretUpdate();
+    setPropertyEditorSearchStatus("Replaced current match.", "info");
+    handlePropertyEditorFind(1);
+}
+
+function handlePropertyEditorReplaceAll() {
+    if (!propertyEditorState.textarea) return;
+    const query = getPropertyEditorSearchQuery();
+    if (!query) {
+        setPropertyEditorSearchStatus("Enter text to find before replacing.", "error");
+        return;
+    }
+    const text = propertyEditorState.textarea.value ?? "";
+    const replacement = getPropertyEditorReplaceText();
+    const occurrences = text.split(query);
+    if (occurrences.length <= 1) {
+        setPropertyEditorSearchStatus("No matches to replace.", "error");
+        return;
+    }
+    propertyEditorState.textarea.value = occurrences.join(replacement);
+    propertyEditorState.textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    schedulePropertyEditorCaretUpdate();
+    setPropertyEditorSearchStatus(`Replaced ${occurrences.length - 1} matches.`, "info");
+}
+
 if (propertyEditorState.modalElement) {
     propertyEditorState.modal = new bootstrap.Modal(propertyEditorState.modalElement);
     propertyEditorState.modalElement.addEventListener("shown.bs.modal", () => {
@@ -89,12 +231,16 @@ if (propertyEditorState.modalElement) {
         propertyEditorState.textarea.focus();
         propertyEditorState.textarea.select();
         schedulePropertyEditorCaretUpdate();
+        updatePropertyEditorSearchControls();
     });
     propertyEditorState.modalElement.addEventListener("hidden.bs.modal", () => {
         propertyEditorState.currentKvRoot = null;
         if (propertyEditorState.positionLabel) {
             propertyEditorState.positionLabel.textContent = "Ln 1, Col 1";
         }
+        if (propertyEditorState.searchInput) propertyEditorState.searchInput.value = "";
+        if (propertyEditorState.replaceInput) propertyEditorState.replaceInput.value = "";
+        setPropertyEditorSearchStatus("", "info");
     });
 }
 
@@ -124,6 +270,33 @@ if (propertyEditorState.textarea) {
         });
     });
 }
+
+if (propertyEditorState.searchInput) {
+    propertyEditorState.searchInput.addEventListener("input", () => {
+        updatePropertyEditorSearchControls();
+        setPropertyEditorSearchStatus("", "info");
+    });
+    propertyEditorState.searchInput.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+            ev.preventDefault();
+            handlePropertyEditorFind(ev.shiftKey ? -1 : 1);
+        }
+    });
+}
+if (propertyEditorState.searchPrevButton) {
+    propertyEditorState.searchPrevButton.addEventListener("click", () => handlePropertyEditorFind(-1));
+}
+if (propertyEditorState.searchNextButton) {
+    propertyEditorState.searchNextButton.addEventListener("click", () => handlePropertyEditorFind(1));
+}
+if (propertyEditorState.replaceButton) {
+    propertyEditorState.replaceButton.addEventListener("click", () => handlePropertyEditorReplaceCurrent());
+}
+if (propertyEditorState.replaceAllButton) {
+    propertyEditorState.replaceAllButton.addEventListener("click", () => handlePropertyEditorReplaceAll());
+}
+
+updatePropertyEditorSearchControls();
 
 /*************************************
  *              Search               *
