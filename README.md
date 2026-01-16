@@ -1,6 +1,6 @@
 # JSON Light Plus
 
-**[🚀 Live Demo](https://dpavlis.github.io/jsonlight-/)**
+**[🚀 Live Demo](https://dpavlis.github.io/jsonlight_plus/)**
 
 ## About
 
