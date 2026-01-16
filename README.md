@@ -6,6 +6,13 @@
 
 A JSON/JSONL viewer and editor designed for readability and practical editing workflows.
 
+<p align="center">
+	<a href="demo.png">
+		<img src="demo.png" alt="JSON Light Plus screenshot" width="800">
+	</a>
+</p>
+<p align="center"><em>Screenshot of JSON Light Plus in action &mdash; click for the full-size image.</em></p>
+
 ## Getting Started
 
 ### Option 1: Use Online (Easiest)
