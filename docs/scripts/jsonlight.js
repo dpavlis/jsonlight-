@@ -97,6 +97,12 @@ let searchRefreshHandle = null;
 let replaceInput = document.querySelector("#replace-input");
 let replaceAllButton = document.querySelector("#replace-all");
 let replaceButton = document.querySelector("#replace-current");
+const topLevelState = { mode: "none", count: 0 };
+const topLevelCountLabel = document.querySelector("#top-level-count");
+const topLevelInput = document.querySelector("#top-level-index-input");
+const topLevelGoButton = document.querySelector("#top-level-go");
+const topLevelErrorLabel = document.querySelector("#top-level-error");
+const topLevelHighlightState = { kvElement: null, rootElement: null, timeoutHandle: null };
 const searchHistoryList = document.querySelector("#search-history-options");
 const replaceHistoryList = document.querySelector("#replace-history-options");
 const SEARCH_HISTORY_STORAGE_KEY = "jsonlight.searchHistory";
@@ -116,6 +122,21 @@ let searchHistoryCommitHandle = null;
 
 initializeSearchAndReplaceHistory();
 
+if (topLevelGoButton) {
+    topLevelGoButton.addEventListener("click", () => {
+        handleTopLevelJump();
+    });
+}
+if (topLevelInput) {
+    topLevelInput.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+            ev.preventDefault();
+            handleTopLevelJump();
+        }
+    });
+    topLevelInput.addEventListener("input", () => setTopLevelError(""));
+}
+
 function requestSearchRefresh() {
     if (!searchInput) return;
     if (searchRefreshHandle) {
@@ -125,6 +146,155 @@ function requestSearchRefresh() {
         searchRefreshHandle = null;
         performSearch();
     }, 75);
+}
+
+function setTopLevelError(message) {
+    if (!topLevelErrorLabel) return;
+    topLevelErrorLabel.textContent = message || "";
+}
+
+function clearTopLevelHighlight() {
+    if (topLevelHighlightState.timeoutHandle) {
+        clearTimeout(topLevelHighlightState.timeoutHandle);
+        topLevelHighlightState.timeoutHandle = null;
+    }
+    if (topLevelHighlightState.kvElement) {
+        topLevelHighlightState.kvElement.classList.remove("top-level-focus");
+        topLevelHighlightState.kvElement = null;
+    }
+    if (topLevelHighlightState.rootElement) {
+        topLevelHighlightState.rootElement.classList.remove("top-level-focus-root");
+        topLevelHighlightState.rootElement = null;
+    }
+}
+
+function applyTopLevelHighlight(kvElement, rootElement, durationMs = 4000) {
+    clearTopLevelHighlight();
+    if (!kvElement) return;
+    kvElement.classList.add("top-level-focus");
+    topLevelHighlightState.kvElement = kvElement;
+    if (rootElement) {
+        rootElement.classList.add("top-level-focus-root");
+        topLevelHighlightState.rootElement = rootElement;
+    }
+    topLevelHighlightState.timeoutHandle = setTimeout(() => {
+        clearTopLevelHighlight();
+    }, durationMs);
+}
+
+function updateTopLevelNavigator() {
+    let mode = "none";
+    let count = 0;
+    if (g_jsonlLoader) {
+        mode = "jsonl";
+        count = g_jsonlLoader.getTotalLines();
+    }
+    else if (g_currentRootLoader) {
+        const rootValue = g_currentRootLoader.getValue();
+        if (Array.isArray(rootValue)) {
+            mode = "json-array";
+            count = rootValue.length;
+        }
+        else if (rootValue && typeof rootValue === "object") {
+            mode = "json-object";
+            count = Object.keys(rootValue).length;
+        }
+        else if (typeof rootValue !== "undefined") {
+            mode = "json-value";
+            count = 1;
+        }
+    }
+    topLevelState.mode = mode;
+    topLevelState.count = count;
+    if (topLevelCountLabel) {
+        topLevelCountLabel.textContent = `${count}`;
+    }
+    const canJump = (mode === "json-array" || mode === "jsonl") && count > 0;
+    if (topLevelInput) {
+        topLevelInput.disabled = !canJump;
+        topLevelInput.placeholder = mode === "jsonl"
+            ? "Line number (1-based)"
+            : (mode === "json-array" ? "Index (0-based)" : "Jump works with arrays or JSONL");
+        if (mode === "json-array") {
+            topLevelInput.min = 0;
+            topLevelInput.max = count > 0 ? count - 1 : 0;
+        }
+        else if (mode === "jsonl") {
+            topLevelInput.min = 1;
+            topLevelInput.max = count;
+        }
+        else {
+            topLevelInput.min = 0;
+            topLevelInput.max = 0;
+        }
+        if (!canJump) {
+            topLevelInput.value = "";
+        }
+    }
+    if (topLevelGoButton) {
+        topLevelGoButton.disabled = !canJump;
+    }
+    if (!canJump) {
+        setTopLevelError("");
+    }
+}
+
+async function handleTopLevelJump() {
+    if (!topLevelInput) return;
+    if (topLevelState.count === 0) {
+        setTopLevelError("No items to jump to.");
+        return;
+    }
+    if (topLevelState.mode === "jsonl" || topLevelState.mode === "json-array") {
+        const rawValue = (topLevelInput.value ?? "").trim();
+        if (!rawValue) {
+            setTopLevelError("Enter a number to jump.");
+            return;
+        }
+        const parsed = Number.parseInt(rawValue, 10);
+        if (!Number.isFinite(parsed)) {
+            setTopLevelError("Enter a valid number.");
+            return;
+        }
+        if (topLevelState.mode === "jsonl") {
+            if (parsed < 1 || parsed > topLevelState.count) {
+                setTopLevelError(`Enter a value between 1 and ${topLevelState.count}.`);
+                return;
+            }
+            setTopLevelError("");
+            navigateToLine(parsed);
+            return;
+        }
+        if (parsed < 0 || parsed >= topLevelState.count) {
+            setTopLevelError(`Enter a value between 0 and ${topLevelState.count - 1}.`);
+            return;
+        }
+        setTopLevelError("");
+        await jumpToArrayIndex(parsed);
+        return;
+    }
+    setTopLevelError("Jump works with arrays or JSONL.");
+}
+
+async function jumpToArrayIndex(index) {
+    const kvRoot = await ensurePathRendered([index]);
+    if (!kvRoot) {
+        setTopLevelError("Unable to locate that array item.");
+        return;
+    }
+    focusKvRoot(kvRoot, true);
+}
+
+function focusKvRoot(kvRoot, includeRootHighlight = false) {
+    if (!kvRoot) return;
+    const target = kvRoot.querySelector(".kv") || kvRoot;
+    applyTopLevelHighlight(target, includeRootHighlight ? kvRoot : null);
+    try {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    catch (error) {
+        target.scrollIntoView();
+    }
 }
 
 function initializeSearchAndReplaceHistory() {
@@ -977,6 +1147,7 @@ function handleValueChanged(loader, options = {}) {
         g_jsonlLoader.updateCurrentLineText(rootLoader.getValue());
     }
     updateDownloadButtons();
+    updateTopLevelNavigator();
     if (!options.skipSearchRefresh) {
         requestSearchRefresh();
     }
@@ -1320,10 +1491,13 @@ let g_editingEnabled = true;
 let downloadJsonButton = null;
 let downloadJsonlButton = null;
 
+updateTopLevelNavigator();
+
 function setCurrentRootLoader(loader, mode) {
     g_currentRootLoader = loader;
     g_currentMode = mode;
     updateDownloadButtons();
+    updateTopLevelNavigator();
 }
 
 function clearCurrentRootLoader() {
@@ -1496,6 +1670,7 @@ async function renderJsonlFile(file) {
         return;
     }
     g_jsonlLoader = loader;
+    updateTopLevelNavigator();
     
     // Show JSONL controls
     showJsonlControls();
@@ -1512,6 +1687,7 @@ function hideJsonlControls() {
     document.querySelector("#jsonl-controls").style.display = "none";
     g_jsonlLoader = null;
     updateDownloadButtons();
+    updateTopLevelNavigator();
 }
 
 function updateJsonlControls() {

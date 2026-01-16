@@ -48,3 +48,15 @@ main {
     border-radius: 0.15rem;
     padding: 0 0.15rem;
 }
+
+.top-level-focus {
+    background-color: #ffe5a1 !important;
+    box-shadow: 0 0 0 2px rgba(255, 193, 7, 0.6);
+    border-radius: 0.25rem;
+    transition: background-color 0.2s ease-out;
+}
+
+.top-level-focus-root {
+    background-color: rgba(255, 229, 161, 0.4);
+    border-radius: 0.5rem;
+}
