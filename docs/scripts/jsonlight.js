@@ -1613,18 +1613,26 @@ function addCollapse(kvRoot, dataRef) {
 
     collapseWrapper.addEventListener('show.bs.collapse', (ev) => {
         ev.stopPropagation();
-        for (const childKV of kvRoot.loader.getChild()) {
-            childList.appendChild(
-                renderKV(...childKV)
-            )
-        }
+        populateCollapseChildren(kvRoot, childList);
         collapseButton.innerHTML = "-";
+        collapseButton.setAttribute("aria-expanded", "true");
     });
     collapseWrapper.addEventListener('hidden.bs.collapse', (ev) => {
         ev.stopPropagation();
         childList.replaceChildren();
         collapseButton.innerHTML = "+";
+        collapseButton.setAttribute("aria-expanded", "false");
     })
+}
+
+function populateCollapseChildren(kvRoot, childList) {
+    if (!kvRoot || !kvRoot.loader || !childList) return;
+    if (childList.childElementCount > 0) return;
+    const fragment = document.createDocumentFragment();
+    for (const childKV of kvRoot.loader.getChild()) {
+        fragment.appendChild(renderKV(...childKV));
+    }
+    childList.appendChild(fragment);
 }
 
 // for a key-value pair in an object, key is a string.
@@ -2981,58 +2989,66 @@ collapseAllButton.addEventListener("click", (ev) => {
 });
 
 async function expandAll() {
-    let foundCollapsed = true;
-    
-    // Keep expanding until no more collapsed items are found
-    while (foundCollapsed) {
-        foundCollapsed = false;
-        const collapseButtons = document.querySelectorAll(".collapse-button");
-        
-        // Create an array of promises for all the expansions in this level
-        const expansionPromises = [];
-        
-        collapseButtons.forEach(button => {
-            const kvRoot = button.closest(".kv-root");
-            const collapseWrapper = kvRoot.querySelector(".collapse");
-            
-            // Only expand if it's currently collapsed
-            if (!collapseWrapper.classList.contains("show")) {
-                foundCollapsed = true;
-                
-                // Create a promise that resolves when the collapse is fully shown
-                const expansionPromise = new Promise((resolve) => {
-                    const onShown = () => {
-                        collapseWrapper.removeEventListener('shown.bs.collapse', onShown);
-                        resolve();
-                    };
-                    collapseWrapper.addEventListener('shown.bs.collapse', onShown);
-                    button.click();
-                });
-                
-                expansionPromises.push(expansionPromise);
-            }
-        });
-        
-        // Wait for all expansions in this level to complete before moving to the next level
-        if (expansionPromises.length > 0) {
-            await Promise.all(expansionPromises);
+    const root = document.querySelector("#view .kv-root");
+    if (!root) return;
+    const queue = [root];
+    let processed = 0;
+    const yieldInterval = 40;
+    while (queue.length > 0) {
+        const current = queue.shift();
+        const children = expandKvRootImmediate(current);
+        if (children.length > 0) {
+            queue.push(...children);
+        }
+        processed += 1;
+        if (processed % yieldInterval === 0) {
+            await yieldToEventLoop();
         }
     }
 }
 
+function expandKvRootImmediate(kvRoot) {
+    if (!kvRoot) return [];
+    const collapseWrapper = kvRoot.querySelector(".collapse");
+    if (!collapseWrapper) return [];
+    const childList = collapseWrapper.querySelector(".child-list");
+    if (!childList) return [];
+    if (!collapseWrapper.classList.contains("show")) {
+        populateCollapseChildren(kvRoot, childList);
+        collapseWrapper.classList.add("show");
+        collapseWrapper.style.height = "";
+        const collapseButton = kvRoot.querySelector(".collapse-button");
+        if (collapseButton) {
+            collapseButton.innerHTML = "-";
+            collapseButton.setAttribute("aria-expanded", "true");
+        }
+    }
+    return Array.from(childList.children).filter((child) => child.classList && child.classList.contains("kv-root"));
+}
+
+function yieldToEventLoop() {
+    return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 function collapseAll() {
-    const collapseButtons = document.querySelectorAll(".collapse-button");
-    collapseButtons.forEach(button => {
-        const kvRoot = button.closest(".kv-root");
-        const collapseWrapper = kvRoot.querySelector(".collapse");
-        
-        // Skip the root level collapse button (it should stay expanded)
-        // The root level button has display: none style applied
-        const isRootLevel = button.style.display === "none";
-        
-        // Only collapse if it's currently expanded and not the root level
-        if (collapseWrapper.classList.contains("show") && !isRootLevel) {
-            button.click();
+    const allWrappers = document.querySelectorAll("#view .kv-root .collapse.show");
+    allWrappers.forEach((collapseWrapper) => {
+        const kvRoot = collapseWrapper.closest(".kv-root");
+        if (!kvRoot) return;
+        const collapseButton = kvRoot.querySelector(".collapse-button");
+        const isRootLevel = collapseButton && collapseButton.style.display === "none";
+        if (isRootLevel) {
+            return;
+        }
+        collapseWrapper.classList.remove("show");
+        collapseWrapper.style.height = "";
+        const childList = collapseWrapper.querySelector(".child-list");
+        if (childList) {
+            childList.replaceChildren();
+        }
+        if (collapseButton) {
+            collapseButton.innerHTML = "+";
+            collapseButton.setAttribute("aria-expanded", "false");
         }
     });
 }
