@@ -29,6 +29,694 @@ let welcome = {
 }
 
 /*************************************
+ *        Property Editor Modal      *
+ *************************************/
+const propertyEditorState = {
+    modalElement: document.querySelector("#property-editor-modal"),
+    textarea: document.querySelector("#property-editor-input"),
+    pathLabel: document.querySelector("#property-editor-path"),
+    applyButton: document.querySelector("#property-editor-apply"),
+    modal: null,
+    currentKvRoot: null,
+};
+
+if (propertyEditorState.modalElement) {
+    propertyEditorState.modal = new bootstrap.Modal(propertyEditorState.modalElement);
+    propertyEditorState.modalElement.addEventListener("shown.bs.modal", () => {
+        if (!propertyEditorState.textarea) return;
+        propertyEditorState.textarea.focus();
+        propertyEditorState.textarea.select();
+    });
+    propertyEditorState.modalElement.addEventListener("hidden.bs.modal", () => {
+        propertyEditorState.currentKvRoot = null;
+    });
+}
+
+if (propertyEditorState.applyButton) {
+    propertyEditorState.applyButton.addEventListener("click", () => {
+        if (!propertyEditorState.currentKvRoot || !propertyEditorState.textarea) return;
+        const newValue = propertyEditorState.textarea.value;
+        const loader = propertyEditorState.currentKvRoot.loader;
+        if (loader && typeof loader.updateValue === "function") {
+            loader.updateValue(newValue);
+        }
+        else if (loader) {
+            loader.value = newValue;
+        }
+        refreshRenderedString(propertyEditorState.currentKvRoot, newValue);
+        handleValueChanged(propertyEditorState.currentKvRoot.loader);
+        if (propertyEditorState.modal) {
+            propertyEditorState.modal.hide();
+        }
+    });
+}
+
+/*************************************
+ *              Search               *
+ *************************************/
+const searchState = {
+    query: "",
+    isRegex: false,
+    matches: [],
+    currentIndex: -1,
+    activeElement: null,
+    error: null,
+    lastQuery: "",
+    lastRecordedQuery: "",
+    lastFocusedPath: null,
+    highlightInfo: null,
+};
+
+let searchInput = document.querySelector("#search-input");
+let searchRegexToggle = document.querySelector("#search-regex");
+let searchPrevButton = document.querySelector("#search-prev");
+let searchNextButton = document.querySelector("#search-next");
+let searchStatusLabel = document.querySelector("#search-status");
+let searchErrorLabel = document.querySelector("#search-error");
+let searchRefreshHandle = null;
+let replaceInput = document.querySelector("#replace-input");
+let replaceAllButton = document.querySelector("#replace-all");
+let replaceButton = document.querySelector("#replace-current");
+const searchHistoryList = document.querySelector("#search-history-options");
+const replaceHistoryList = document.querySelector("#replace-history-options");
+const SEARCH_HISTORY_STORAGE_KEY = "jsonlight.searchHistory";
+const REPLACE_HISTORY_STORAGE_KEY = "jsonlight.replaceHistory";
+const SEARCH_HISTORY_LIMIT = 12;
+const REPLACE_HISTORY_LIMIT = 12;
+const SEARCH_HISTORY_COMMIT_DELAY = 500;
+const SEARCH_REGEX_EXAMPLES = [
+    String.raw`toDate\((?:(?!;).)+\)`,
+    String.raw`\bhttps?://[^\s]+`,
+    String.raw`"errorCode"\s*:\s*\d+`,
+    String.raw`(?<="userId"\s*:\s?")([^"\s]+)`
+];
+let searchHistoryValues = [];
+let replaceHistoryValues = [];
+let searchHistoryCommitHandle = null;
+
+initializeSearchAndReplaceHistory();
+
+function requestSearchRefresh() {
+    if (!searchInput) return;
+    if (searchRefreshHandle) {
+        clearTimeout(searchRefreshHandle);
+    }
+    searchRefreshHandle = setTimeout(() => {
+        searchRefreshHandle = null;
+        performSearch();
+    }, 75);
+}
+
+function initializeSearchAndReplaceHistory() {
+    searchHistoryValues = loadHistoryList(SEARCH_HISTORY_STORAGE_KEY, SEARCH_HISTORY_LIMIT)
+        .map((value) => (typeof value === "string" ? value.trim() : ""))
+        .filter(Boolean);
+    replaceHistoryValues = loadHistoryList(REPLACE_HISTORY_STORAGE_KEY, REPLACE_HISTORY_LIMIT)
+        .filter((value) => typeof value === "string");
+    refreshSearchHistoryDatalist();
+    refreshReplaceHistoryDatalist();
+}
+
+function getLocalStorageSafe() {
+    if (typeof window === "undefined") return null;
+    try {
+        return window.localStorage || null;
+    }
+    catch (error) {
+        console.warn("Local storage unavailable", error);
+        return null;
+    }
+}
+
+function loadHistoryList(storageKey, limit) {
+    const storage = getLocalStorageSafe();
+    if (!storage) return [];
+    try {
+        const raw = storage.getItem(storageKey);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+            return parsed.filter((value) => typeof value === "string").slice(0, limit);
+        }
+    }
+    catch (error) {
+        console.warn("Failed to load history", error);
+    }
+    return [];
+}
+
+function saveHistoryList(storageKey, values) {
+    const storage = getLocalStorageSafe();
+    if (!storage) return;
+    try {
+        storage.setItem(storageKey, JSON.stringify(values));
+    }
+    catch (error) {
+        console.warn("Failed to save history", error);
+    }
+}
+
+function refreshSearchHistoryDatalist() {
+    if (!searchHistoryList) return;
+    const seen = new Set();
+    const combined = [];
+    SEARCH_REGEX_EXAMPLES.forEach((example) => {
+        const value = (example ?? "").toString();
+        if (value && !seen.has(value)) {
+            combined.push(value);
+            seen.add(value);
+        }
+    });
+    searchHistoryValues.forEach((value) => {
+        const normalized = (value ?? "").toString();
+        if (normalized && !seen.has(normalized)) {
+            combined.push(normalized);
+            seen.add(normalized);
+        }
+    });
+    populateDatalist(searchHistoryList, combined);
+}
+
+function refreshReplaceHistoryDatalist() {
+    if (!replaceHistoryList) return;
+    populateDatalist(replaceHistoryList, [...replaceHistoryValues]);
+}
+
+function populateDatalist(listElement, values) {
+    if (!listElement) return;
+    listElement.innerHTML = "";
+    const fragment = document.createDocumentFragment();
+    values.forEach((value) => {
+        if (typeof value !== "string") return;
+        const option = document.createElement("option");
+        option.value = value;
+        fragment.appendChild(option);
+    });
+    listElement.appendChild(fragment);
+}
+
+function updateHistoryList(history, value, limit) {
+    const filtered = history.filter((entry) => entry !== value);
+    filtered.unshift(value);
+    if (filtered.length > limit) {
+        filtered.length = limit;
+    }
+    return filtered;
+}
+
+function recordSearchHistoryValue(value) {
+    const normalized = (value ?? "").trim();
+    if (!normalized) return;
+    searchHistoryValues = updateHistoryList(searchHistoryValues, normalized, SEARCH_HISTORY_LIMIT);
+    saveHistoryList(SEARCH_HISTORY_STORAGE_KEY, searchHistoryValues);
+    refreshSearchHistoryDatalist();
+}
+
+function recordReplaceHistoryValue(value) {
+    if (typeof value !== "string") return;
+    if (value === "") return;
+    replaceHistoryValues = updateHistoryList(replaceHistoryValues, value, REPLACE_HISTORY_LIMIT);
+    saveHistoryList(REPLACE_HISTORY_STORAGE_KEY, replaceHistoryValues);
+    refreshReplaceHistoryDatalist();
+}
+
+function queueSearchHistoryCommit() {
+    if (!searchInput) return;
+    if (searchHistoryCommitHandle) {
+        clearTimeout(searchHistoryCommitHandle);
+    }
+    searchHistoryCommitHandle = setTimeout(() => {
+        searchHistoryCommitHandle = null;
+        commitSearchHistory();
+    }, SEARCH_HISTORY_COMMIT_DELAY);
+}
+
+function flushPendingSearch() {
+    if (!searchRefreshHandle) return;
+    clearTimeout(searchRefreshHandle);
+    searchRefreshHandle = null;
+    performSearch();
+}
+
+function commitSearchHistory() {
+    if (!searchInput) return;
+    if (searchHistoryCommitHandle) {
+        clearTimeout(searchHistoryCommitHandle);
+        searchHistoryCommitHandle = null;
+    }
+    flushPendingSearch();
+    const query = (searchInput.value ?? "").trim();
+    if (!query) {
+        searchState.lastRecordedQuery = "";
+        return;
+    }
+    if (query === searchState.lastRecordedQuery) {
+        return;
+    }
+    if (searchState.error) return;
+    recordSearchHistoryValue(query);
+    searchState.lastRecordedQuery = query;
+}
+
+function performSearch() {
+    if (!searchInput) return;
+    const query = searchInput.value.trim();
+    searchState.query = query;
+    searchState.matches = [];
+    searchState.currentIndex = -1;
+    searchState.error = null;
+    setActiveSearchElement(null);
+    const previousQuery = searchState.lastQuery;
+    searchState.lastQuery = query;
+    if (query !== previousQuery) {
+        searchState.lastFocusedPath = null;
+    }
+
+    if (!query || !g_currentRootLoader) {
+        searchState.lastFocusedPath = null;
+        updateSearchControls();
+        return;
+    }
+
+    const matcher = buildSearchMatcher(query, searchState.isRegex);
+    if (!matcher) {
+        updateSearchControls();
+        return;
+    }
+
+    const rootValue = g_currentRootLoader.getValue();
+    collectSearchMatches(rootValue, [], matcher);
+
+    if (searchState.matches.length === 0) {
+        searchState.lastFocusedPath = null;
+        updateSearchControls();
+        return;
+    }
+
+    let focusIndex = 0;
+    const preservedIndex = findMatchIndexByPath(searchState.lastFocusedPath);
+    if (preservedIndex !== -1) {
+        focusIndex = preservedIndex;
+    }
+    focusSearchResultByIndex(focusIndex);
+}
+
+function buildSearchMatcher(query, isRegex) {
+    if (isRegex) {
+        try {
+            const regex = new RegExp(query, "i");
+            return (text) => regex.test((text ?? "").toString());
+        }
+        catch (error) {
+            searchState.error = error.message;
+            return null;
+        }
+    }
+    const needle = query.toLowerCase();
+    return (text) => (text ?? "").toString().toLowerCase().includes(needle);
+}
+
+function collectSearchMatches(value, path, matcher) {
+    if (Array.isArray(value)) {
+        value.forEach((item, index) => {
+            evaluateSearchNode(path, index, item, matcher);
+        });
+        return;
+    }
+    if (value && typeof value === "object") {
+        Object.entries(value).forEach(([key, childValue]) => {
+            evaluateSearchNode(path, key, childValue, matcher);
+        });
+        return;
+    }
+
+    const primitiveText = formatValueForSearch(value);
+    if (matcher(primitiveText)) {
+        searchState.matches.push({ path: [...path], matchSource: "value", snippet: primitiveText });
+    }
+}
+
+function evaluateSearchNode(path, key, value, matcher) {
+    const nextPath = [...path, key];
+    const keyText = keyToSearchString(key);
+    const rawKeyText = typeof key === "string" ? key : (typeof key === "number" ? key.toString() : "");
+    if ((keyText && matcher(keyText)) || (rawKeyText && matcher(rawKeyText))) {
+        searchState.matches.push({ path: nextPath, matchSource: "key", snippet: rawKeyText || keyText });
+    }
+    if (isPrimitiveValue(value)) {
+        const valueText = formatValueForSearch(value);
+        if (matcher(valueText)) {
+            searchState.matches.push({ path: nextPath, matchSource: "value", snippet: valueText });
+        }
+    }
+    if (value && typeof value === "object") {
+        collectSearchMatches(value, nextPath, matcher);
+    }
+}
+
+function keyToSearchString(key) {
+    if (key === null || typeof key === "undefined") return "root";
+    if (typeof key === "number") return `[${key}]`;
+    if (typeof key === "string") return JSON.stringify(key);
+    return key.toString();
+}
+
+function formatValueForSearch(value) {
+    if (value === null) return "null";
+    switch (typeof value) {
+        case "string":
+            return value;
+        case "number":
+        case "boolean":
+            return value.toString();
+        case "object":
+            try {
+                return JSON.stringify(value);
+            }
+            catch (error) {
+                return "";
+            }
+        default:
+            return "";
+    }
+}
+
+function isPrimitiveValue(value) {
+    return value === null || (typeof value !== "object" && typeof value !== "function");
+}
+
+async function focusSearchResultByIndex(index) {
+    if (index < 0 || index >= searchState.matches.length) return;
+    const match = searchState.matches[index];
+    const kvRoot = await ensurePathRendered(match.path);
+    if (!kvRoot) {
+        updateSearchControls();
+        return;
+    }
+    const target = kvRoot.querySelector(".kv") || kvRoot;
+    setActiveSearchElement(target);
+    highlightMatchInKv(kvRoot, match);
+    try {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    catch (error) {
+        target.scrollIntoView();
+    }
+    searchState.currentIndex = index;
+    searchState.lastFocusedPath = match ? { path: clonePath(match.path), source: match.matchSource } : null;
+    updateSearchControls();
+}
+
+function clonePath(path) {
+    return Array.isArray(path) ? [...path] : null;
+}
+
+function findMatchIndexByPath(targetInfo) {
+    if (!targetInfo || !targetInfo.path) return -1;
+    for (let i = 0; i < searchState.matches.length; i++) {
+        const match = searchState.matches[i];
+        if (match.matchSource === targetInfo.source && pathsEqual(match.path, targetInfo.path)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+function pathsEqual(pathA, pathB) {
+    if (!Array.isArray(pathA) || !Array.isArray(pathB)) return false;
+    if (pathA.length !== pathB.length) return false;
+    for (let i = 0; i < pathA.length; i++) {
+        if (pathA[i] !== pathB[i]) return false;
+    }
+    return true;
+}
+
+async function ensurePathRendered(pathSegments) {
+    const rootKvRoot = document.querySelector("#view .kv-root");
+    if (!rootKvRoot) return null;
+    if (!pathSegments || pathSegments.length === 0) {
+        await expandKvRoot(rootKvRoot);
+        return rootKvRoot;
+    }
+
+    let currentKvRoot = rootKvRoot;
+    for (const segment of pathSegments) {
+        await expandKvRoot(currentKvRoot);
+        currentKvRoot = findChildKvRoot(currentKvRoot, segment);
+        if (!currentKvRoot) return null;
+    }
+    return currentKvRoot;
+}
+
+function expandKvRoot(kvRoot) {
+    return new Promise((resolve) => {
+        const collapseWrapper = kvRoot.querySelector(".collapse");
+        if (!collapseWrapper) {
+            resolve();
+            return;
+        }
+        if (collapseWrapper.classList.contains("show")) {
+            resolve();
+            return;
+        }
+
+        const onShown = () => {
+            collapseWrapper.removeEventListener('shown.bs.collapse', onShown);
+            resolve();
+        };
+        collapseWrapper.addEventListener('shown.bs.collapse', onShown);
+        let collapse = bootstrap.Collapse.getInstance(collapseWrapper);
+        if (collapse) {
+            collapse.show();
+        }
+        else {
+            collapse = new bootstrap.Collapse(collapseWrapper);
+        }
+    });
+}
+
+function findChildKvRoot(parentKvRoot, key) {
+    const collapseWrapper = parentKvRoot.querySelector(".collapse");
+    if (!collapseWrapper) return null;
+    const childList = collapseWrapper.querySelector(".child-list");
+    if (!childList) return null;
+    for (const child of childList.children) {
+        if (child.loader && keysEqual(child.loader.parentKey, key)) {
+            return child;
+        }
+    }
+    return null;
+}
+
+function keysEqual(a, b) {
+    if (typeof a === "number" || typeof b === "number") {
+        return Number(a) === Number(b);
+    }
+    return String(a) === String(b);
+}
+
+function setActiveSearchElement(element) {
+    if (searchState.activeElement && searchState.activeElement !== element) {
+        searchState.activeElement.classList.remove("search-current");
+    }
+    if (element) {
+        element.classList.add("search-current");
+        searchState.activeElement = element;
+    }
+    else {
+        searchState.activeElement = null;
+        clearMatchHighlight();
+    }
+}
+
+function updateSearchControls() {
+    const hasMatches = searchState.matches.length > 0 && !searchState.error;
+    if (searchPrevButton) searchPrevButton.disabled = !hasMatches;
+    if (searchNextButton) searchNextButton.disabled = !hasMatches;
+    if (searchStatusLabel) {
+        if (hasMatches && searchState.currentIndex >= 0) {
+            searchStatusLabel.textContent = `${searchState.currentIndex + 1} / ${searchState.matches.length}`;
+        }
+        else {
+            searchStatusLabel.textContent = "0 / 0";
+        }
+    }
+    if (searchErrorLabel) {
+        searchErrorLabel.textContent = searchState.error ? `Regex error: ${searchState.error}` : "";
+    }
+    const canReplaceNow = hasMatches && !!searchState.query;
+    if (replaceAllButton) replaceAllButton.disabled = !canReplaceNow;
+    if (replaceButton) replaceButton.disabled = !canReplaceNow;
+}
+
+function getSearchRegex(global, options = {}) {
+    if (!searchState.query) return null;
+    let pattern = searchState.query;
+    if (!searchState.isRegex) {
+        pattern = escapeRegExp(searchState.query);
+    }
+    const flags = global ? "gi" : "i";
+    try {
+        return new RegExp(pattern, flags);
+    }
+    catch (error) {
+        if (options.reportError) {
+            searchState.error = error.message;
+            updateSearchControls();
+        }
+        return null;
+    }
+}
+
+function escapeHtml(str) {
+    if (str == null) return "";
+    return str
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
+function clearMatchHighlight() {
+    if (searchState.highlightInfo && searchState.highlightInfo.element) {
+        searchState.highlightInfo.element.innerHTML = searchState.highlightInfo.originalHtml;
+    }
+    searchState.highlightInfo = null;
+}
+
+function applyTextHighlight(element) {
+    if (!element) return;
+    const regex = getSearchRegex(false);
+    if (!regex) return;
+    const text = element.textContent;
+    if (!text) return;
+    regex.lastIndex = 0;
+    const match = regex.exec(text);
+    if (!match) return;
+    const before = text.slice(0, match.index);
+    const matchText = match[0];
+    const after = text.slice(match.index + matchText.length);
+    searchState.highlightInfo = {
+        element,
+        originalHtml: element.innerHTML
+    };
+    element.innerHTML = `${escapeHtml(before)}<span class="match-highlight">${escapeHtml(matchText)}</span>${escapeHtml(after)}`;
+}
+
+function highlightMatchInKv(kvRoot, match) {
+    clearMatchHighlight();
+    if (!kvRoot || !match) return;
+    let targetElement = null;
+    if (match.matchSource === "key") {
+        targetElement = kvRoot.querySelector(".json-key");
+    }
+    else {
+        targetElement = kvRoot.querySelector(".json-value");
+    }
+    if (targetElement) {
+        applyTextHighlight(targetElement);
+    }
+}
+
+function moveSearch(direction) {
+    commitSearchHistory();
+    if (searchState.matches.length === 0 || searchState.error) return;
+    let targetIndex = searchState.currentIndex;
+    if (targetIndex === -1) {
+        targetIndex = direction > 0 ? 0 : searchState.matches.length - 1;
+    }
+    else {
+        targetIndex = (targetIndex + direction + searchState.matches.length) % searchState.matches.length;
+    }
+    focusSearchResultByIndex(targetIndex);
+}
+
+function canPerformReplacement() {
+    return !!searchState.query && !searchState.error && searchState.matches.length > 0;
+}
+
+function getReplaceText() {
+    if (!replaceInput) return "";
+    return replaceInput.value ?? "";
+}
+
+function escapeRegExp(str) {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildReplacementRegex(replaceAllOccurrences) {
+    return getSearchRegex(replaceAllOccurrences, { reportError: true });
+}
+
+async function replaceValueAtPath(path, replaceAllOccurrences) {
+    const regex = buildReplacementRegex(replaceAllOccurrences);
+    if (!regex) return false;
+    const kvRoot = await ensurePathRendered(path);
+    if (!kvRoot || !kvRoot.loader) return false;
+    const loader = kvRoot.loader;
+    const currentValue = loader.getValue();
+    if (typeof currentValue !== "string") return false;
+    const replacementText = getReplaceText();
+    const newValue = currentValue.replace(regex, replacementText);
+    if (newValue === currentValue) return false;
+    if (typeof loader.updateValue === "function") {
+        loader.updateValue(newValue);
+    }
+    else {
+        loader.value = newValue;
+    }
+    refreshRenderedString(kvRoot, newValue);
+    handleValueChanged(loader, { skipSearchRefresh: true });
+    return true;
+}
+
+async function replaceCurrentMatch(advanceToNext) {
+    if (!canPerformReplacement()) return;
+    if (searchState.currentIndex === -1) {
+        await focusSearchResultByIndex(0);
+    }
+    if (searchState.currentIndex === -1) return;
+    const currentMatch = searchState.matches[searchState.currentIndex];
+    if (!currentMatch) return;
+    if (currentMatch.matchSource !== "value") {
+        moveSearch(1);
+        return;
+    }
+    const currentPath = clonePath(currentMatch.path);
+    const replaced = await replaceValueAtPath(currentPath, false);
+    if (!replaced) return;
+    recordReplaceHistoryValue(getReplaceText());
+    let desiredInfo = { path: currentPath, source: "value" };
+    if (advanceToNext) {
+        const nextMatch = searchState.matches[searchState.currentIndex + 1];
+        desiredInfo = nextMatch ? { path: clonePath(nextMatch.path), source: nextMatch.matchSource } : null;
+    }
+    searchState.lastFocusedPath = desiredInfo;
+    performSearch();
+}
+
+async function replaceAllMatches() {
+    if (!canPerformReplacement()) return;
+    const matchPaths = searchState.matches
+        .filter(match => match.matchSource === "value")
+        .map(match => clonePath(match.path))
+        .filter(Boolean);
+    let replacedAny = false;
+    for (const path of matchPaths) {
+        const replaced = await replaceValueAtPath(path, true);
+        if (replaced) {
+            replacedAny = true;
+        }
+    }
+    if (replacedAny) {
+        recordReplaceHistoryValue(getReplaceText());
+    }
+    searchState.lastFocusedPath = null;
+    performSearch();
+}
+
+/*************************************
  *              Renderer             *
  *************************************/
 
@@ -85,13 +773,29 @@ function newKV(loader) {
     return kvRoot;
 }
 
+function newIconButton(text) {
+    let button = document.createElement("button");
+    button.classList.add("btn", "btn-light", "btn-sm");
+    button.setAttribute("type", "button");
+    button.innerHTML = text;
+    return button;
+}
+
 function newToggleButton(text) {
-    let toggleButton = document.createElement("button");
-    toggleButton.classList.add("btn", "btn-light", "btn-sm");
+    let toggleButton = newIconButton(text);
     toggleButton.setAttribute("data-bs-toggle", "button");
-    toggleButton.setAttribute("type", "button");
-    toggleButton.innerHTML = text;
     return toggleButton;
+}
+
+function ensureButtonGroup(kvRoot) {
+    let kv = kvRoot.querySelector(".kv");
+    let buttonGroup = kv.querySelector(".kv-button-group");
+    if (!buttonGroup) {
+        buttonGroup = document.createElement("div");
+        buttonGroup.classList.add("kv-button-group");
+        kv.insertBefore(buttonGroup, kv.firstChild);
+    }
+    return buttonGroup;
 }
 
 // Adds a collapse button and a collapsed child list to kvRoot.
@@ -104,7 +808,8 @@ function addCollapse(kvRoot, dataRef) {
     
     let collapseButton = newToggleButton("+");
     collapseButton.classList.add("toggle-button", "collapse-button");
-    kv.insertBefore(collapseButton, kv.firstChild);
+    let buttonGroup = ensureButtonGroup(kvRoot);
+    buttonGroup.insertBefore(collapseButton, buttonGroup.firstChild);
     
     let collapseWrapper = document.createElement("div");
     collapseWrapper.classList.add("collapse");
@@ -154,7 +859,7 @@ function renderKey(key) {
         keystr = JSON.stringify(key);
     }
     let keySpan = document.createElement("span");
-    keySpan.classList.add("text-primary");
+    keySpan.classList.add("text-primary", "json-key");
     keySpan.innerText = keystr;
     return keySpan;
 }
@@ -170,9 +875,123 @@ function addViewRaw(kvRoot) {
             cancelRawString(kvRoot);
         }
     });
-    
-    let kv = kvRoot.querySelector(".kv");
-    kv.insertBefore(viewRawButton, kv.firstChild);
+    let buttonGroup = ensureButtonGroup(kvRoot);
+    buttonGroup.appendChild(viewRawButton);
+}
+
+function addEditButton(kvRoot) {
+    if (!propertyEditorState.modalElement || !propertyEditorState.textarea) return;
+    let editButton = newIconButton("E");
+    editButton.classList.add("toggle-button", "edit-button");
+    editButton.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        openPropertyEditor(kvRoot);
+    });
+
+    let buttonGroup = ensureButtonGroup(kvRoot);
+    let viewRawButton = buttonGroup.querySelector(".view-raw-button");
+    if (viewRawButton) {
+        viewRawButton.insertAdjacentElement("afterend", editButton);
+    }
+    else {
+        buttonGroup.appendChild(editButton);
+    }
+    updateEditButtonVisibility(editButton);
+}
+
+function openPropertyEditor(kvRoot) {
+    if (!propertyEditorState.modal || !propertyEditorState.textarea) return;
+    propertyEditorState.currentKvRoot = kvRoot;
+    const loader = kvRoot.loader;
+    const value = loader ? loader.getValue() : "";
+    propertyEditorState.textarea.value = typeof value === "string" ? value : "";
+    updatePropertyEditorPath(loader);
+    propertyEditorState.modal.show();
+}
+
+function refreshRenderedString(kvRoot, newValue) {
+    let jsonValue = kvRoot.querySelector(".kv .kv-text .json-value");
+    if (jsonValue) {
+        jsonValue.textContent = JSON.stringify(newValue);
+    }
+    let rawString = kvRoot.querySelector(".raw-string");
+    if (rawString) {
+        rawString.textContent = newValue + "\n";
+    }
+}
+
+function updatePropertyEditorPath(loader) {
+    if (!propertyEditorState.pathLabel) return;
+    propertyEditorState.pathLabel.textContent = formatLoaderPath(loader);
+}
+
+function formatLoaderPath(loader) {
+    if (!loader) return "root";
+    let segments = [];
+    let current = loader;
+    while (current && current.parentLoader) {
+        segments.unshift(current.parentKey);
+        current = current.parentLoader;
+    }
+    return buildPathFromSegments(segments);
+}
+
+function buildPathFromSegments(segments) {
+    if (!segments.length) return "root";
+    let path = "root";
+    for (const segment of segments) {
+        if (typeof segment === "number") {
+            path += `[${segment}]`;
+        }
+        else if (segment == null) {
+            continue;
+        }
+        else if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(segment)) {
+            path += `.${segment}`;
+        }
+        else {
+            path += `["${escapePathSegment(segment)}"]`;
+        }
+    }
+    return path;
+}
+
+function escapePathSegment(segment) {
+    let segmentStr = String(segment);
+    return segmentStr.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function getRootLoader(loader) {
+    if (!loader) return null;
+    let current = loader;
+    while (current && current.parentLoader) {
+        current = current.parentLoader;
+    }
+    return current;
+}
+
+function handleValueChanged(loader, options = {}) {
+    let rootLoader = getRootLoader(loader);
+    if (!rootLoader || rootLoader !== g_currentRootLoader) return;
+    if (g_currentMode === "jsonl-line" && g_jsonlLoader) {
+        g_jsonlLoader.updateCurrentLineText(rootLoader.getValue());
+    }
+    updateDownloadButtons();
+    if (!options.skipSearchRefresh) {
+        requestSearchRefresh();
+    }
+}
+
+function updateEditButtonVisibility(button) {
+    if (!button) return;
+    button.style.display = g_editingEnabled ? "" : "none";
+}
+
+function setEditingEnabled(isEnabled) {
+    g_editingEnabled = isEnabled;
+    document.querySelectorAll(".edit-button").forEach(button => {
+        updateEditButtonVisibility(button);
+    });
 }
 
 function renderRawString(kvRoot) {
@@ -204,6 +1023,7 @@ function renderStringify(jobj) {
 
 function renderString(kvRoot, jobj) {
     addViewRaw(kvRoot);
+    addEditButton(kvRoot);
     return renderStringify(jobj);
 }
 
@@ -253,12 +1073,25 @@ function renderObject(kvRoot, jobj) {
 class DataLoader {
     constructor() {
         this.value = undefined;
+        this.parentLoader = null;
+        this.parentKey = null;
     }
 
     loadString() {}
     async loadFile() {}
     loadObject(obj) {
         this.value = obj;
+    }
+    assignParent(parentLoader, parentKey) {
+        this.parentLoader = parentLoader;
+        this.parentKey = parentKey;
+    }
+    updateValue(newValue) {
+        this.value = newValue;
+        if (!this.parentLoader) return;
+        if (this.parentKey === null) return;
+        if (this.parentLoader.value == null || typeof this.parentLoader.value != "object") return;
+        this.parentLoader.value[this.parentKey] = newValue;
     }
     getValue() {
         return this.value;
@@ -325,6 +1158,7 @@ class WebDataLoader extends DataLoader {
         if (Array.isArray(this.value)) {
             for (const [i, v] of this.value.entries()) {
                 let childLoader = new WebDataLoader();
+                childLoader.assignParent(this, i);
                 childLoader.loadObject(v);
                 ret.push([i, childLoader]);
             }
@@ -334,10 +1168,22 @@ class WebDataLoader extends DataLoader {
         // Object
         for (const [k, v] of Object.entries(this.value)) {
             let childLoader = new WebDataLoader();
+            childLoader.assignParent(this, k);
             childLoader.loadObject(v);
             ret.push([k, childLoader]);
         }
         return ret;
+    }
+
+    updateCurrentLineText(updatedValue) {
+        if (this.currentLine == null || this.currentLine < 0 || this.currentLine >= this.lines.length) return;
+        this.value = updatedValue;
+        try {
+            this.lines[this.currentLine] = JSON.stringify(updatedValue);
+        }
+        catch (error) {
+            console.warn("Failed to serialize JSONL line", error);
+        }
     }
 }
 
@@ -415,6 +1261,7 @@ class JsonlDataLoader extends DataLoader {
         if (Array.isArray(this.value)) {
             for (const [i, v] of this.value.entries()) {
                 let childLoader = new WebDataLoader();
+                childLoader.assignParent(this, i);
                 childLoader.loadObject(v);
                 ret.push([i, childLoader]);
             }
@@ -424,6 +1271,7 @@ class JsonlDataLoader extends DataLoader {
         // Object
         for (const [k, v] of Object.entries(this.value)) {
             let childLoader = new WebDataLoader();
+            childLoader.assignParent(this, k);
             childLoader.loadObject(v);
             ret.push([k, childLoader]);
         }
@@ -462,7 +1310,113 @@ function clearFileNameDisplay() {
  *************************************/
 
 let g_platform = "web";
+if (typeof window !== "undefined" && window.__TAURI__) {
+    g_platform = "desktop";
+}
 let g_jsonlLoader = null; // Global JSONL loader for line navigation
+let g_currentRootLoader = null;
+let g_currentMode = null;
+let g_editingEnabled = true;
+let downloadJsonButton = null;
+let downloadJsonlButton = null;
+
+function setCurrentRootLoader(loader, mode) {
+    g_currentRootLoader = loader;
+    g_currentMode = mode;
+    updateDownloadButtons();
+}
+
+function clearCurrentRootLoader() {
+    setCurrentRootLoader(null, null);
+}
+
+function updateDownloadButtons() {
+    if (downloadJsonButton) {
+        downloadJsonButton.disabled = !g_currentRootLoader;
+    }
+    if (downloadJsonlButton) {
+        downloadJsonlButton.disabled = !g_jsonlLoader;
+    }
+}
+
+function getJsonText() {
+    if (!g_currentRootLoader) return null;
+    let value = g_currentRootLoader.getValue();
+    if (typeof value === "undefined") return null;
+    return JSON.stringify(value, null, 2);
+}
+
+function getJsonlText() {
+    if (!g_jsonlLoader || !g_jsonlLoader.lines || g_jsonlLoader.lines.length === 0) return null;
+    return g_jsonlLoader.lines.join("\n");
+}
+
+function promptFileName(format) {
+    let suggestedName = format === "jsonl" ? "data.jsonl" : "data.json";
+    if (typeof window === "undefined" || typeof window.prompt !== "function") {
+        return suggestedName;
+    }
+    let userInput = window.prompt("Enter file name", suggestedName);
+    if (userInput == null) return null;
+    let trimmed = userInput.trim();
+    if (!trimmed) {
+        trimmed = suggestedName;
+    }
+    let extension = format === "jsonl" ? ".jsonl" : ".json";
+    if (!trimmed.toLowerCase().endsWith(extension)) {
+        trimmed += extension;
+    }
+    return trimmed;
+}
+
+async function handleSaveRequest(format) {
+    let content = format === "jsonl" ? getJsonlText() : getJsonText();
+    if (!content) {
+        alert("No data available to save yet.");
+        return;
+    }
+    let chosenName = promptFileName(format);
+    if (!chosenName) return;
+    if (typeof window !== "undefined" && window.__TAURI__) {
+        await saveWithTauri(content, chosenName, format);
+    }
+    else {
+        let mimeType = format === "jsonl" ? "application/jsonl" : "application/json";
+        triggerDownload(content, chosenName, mimeType);
+    }
+}
+
+async function saveWithTauri(content, defaultName, format) {
+    try {
+        const [{ save }, { writeTextFile }] = await Promise.all([
+            import("https://cdn.jsdelivr.net/npm/@tauri-apps/api@2/dialog"),
+            import("https://cdn.jsdelivr.net/npm/@tauri-apps/api@2/fs")
+        ]);
+        const filePath = await save({
+            defaultPath: defaultName,
+            filters: [{ name: format.toUpperCase(), extensions: [format] }]
+        });
+        if (filePath) {
+            await writeTextFile(filePath, content);
+        }
+    }
+    catch (error) {
+        console.error("Failed to save file", error);
+        alert("Unable to save file: " + error.message);
+    }
+}
+
+function triggerDownload(content, filename, mimeType) {
+    let blob = new Blob([content], { type: mimeType });
+    let url = URL.createObjectURL(blob);
+    let anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+}
 
 function newDataLoader() {
     if (g_platform == "web") {
@@ -481,6 +1435,7 @@ function renderJSON(loader) {
         rootButton.style.display = "none";
         rootButton.click();
     }
+    requestSearchRefresh();
 }
 
 function displayParseError(errorInfo) {
@@ -498,6 +1453,7 @@ function displayParseError(errorInfo) {
     errorContainer.appendChild(errorMessage);
     
     document.querySelector("#view").appendChild(errorContainer);
+    requestSearchRefresh();
 }
 
 function renderJsonStr(jsonStr) {
@@ -506,9 +1462,11 @@ function renderJsonStr(jsonStr) {
     let loader = newDataLoader();
     let result = loader.loadString(jsonStr);
     if (!result.success) {
+        clearCurrentRootLoader();
         displayParseError(result);
         return;
     }
+    setCurrentRootLoader(loader, "json");
     renderJSON(loader);
 }
 
@@ -518,26 +1476,32 @@ async function renderJsonFile(file) {
     let loader = newDataLoader();
     let result = await loader.loadFile(file);
     if (!result.success) {
+        clearCurrentRootLoader();
         displayParseError(result);
         return;
     }
+    setCurrentRootLoader(loader, "json");
     renderJSON(loader);
 }
 
 async function renderJsonlFile(file) {
     document.querySelector("#view").replaceChildren();
-    
-    g_jsonlLoader = new JsonlDataLoader();
-    let result = await g_jsonlLoader.loadFile(file);
+
+    const loader = new JsonlDataLoader();
+    let result = await loader.loadFile(file);
     if (!result.success) {
+        hideJsonlControls();
+        clearCurrentRootLoader();
         displayParseError(result);
         return;
     }
+    g_jsonlLoader = loader;
     
     // Show JSONL controls
     showJsonlControls();
     updateJsonlControls();
     renderCurrentJsonlLine();
+    updateDownloadButtons();
 }
 
 function showJsonlControls() {
@@ -547,6 +1511,7 @@ function showJsonlControls() {
 function hideJsonlControls() {
     document.querySelector("#jsonl-controls").style.display = "none";
     g_jsonlLoader = null;
+    updateDownloadButtons();
 }
 
 function updateJsonlControls() {
@@ -572,6 +1537,7 @@ function renderCurrentJsonlLine() {
     // Create a temporary loader with the current line's data
     let loader = new WebDataLoader();
     loader.loadObject(g_jsonlLoader.getValue());
+    setCurrentRootLoader(loader, "jsonl-line");
     renderJSON(loader);
 }
 
@@ -746,6 +1712,70 @@ function collapseAll() {
     });
 }
 
+let editingToggle = document.querySelector("#toggle-editing");
+if (editingToggle) {
+    editingToggle.checked = g_editingEnabled;
+    editingToggle.addEventListener("change", () => {
+        setEditingEnabled(editingToggle.checked);
+    });
+}
+
+downloadJsonButton = document.querySelector("#download-json");
+if (downloadJsonButton) {
+    downloadJsonButton.addEventListener("click", () => handleSaveRequest("json"));
+}
+
+downloadJsonlButton = document.querySelector("#download-jsonl");
+if (downloadJsonlButton) {
+    downloadJsonlButton.addEventListener("click", () => handleSaveRequest("jsonl"));
+}
+updateDownloadButtons();
+
+if (searchRegexToggle) {
+    searchState.isRegex = searchRegexToggle.checked;
+    searchRegexToggle.addEventListener("change", () => {
+        searchState.isRegex = searchRegexToggle.checked;
+        performSearch();
+    });
+}
+else {
+    searchState.isRegex = false;
+}
+
+if (searchInput) {
+    searchInput.addEventListener("input", () => {
+        requestSearchRefresh();
+        queueSearchHistoryCommit();
+    });
+    searchInput.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+            ev.preventDefault();
+            commitSearchHistory();
+            moveSearch(ev.shiftKey ? -1 : 1);
+        }
+    });
+    searchInput.addEventListener("blur", () => commitSearchHistory());
+}
+
+if (searchPrevButton) {
+    searchPrevButton.addEventListener("click", () => moveSearch(-1));
+}
+if (searchNextButton) {
+    searchNextButton.addEventListener("click", () => moveSearch(1));
+}
+updateSearchControls();
+
+if (replaceAllButton) {
+    replaceAllButton.addEventListener("click", () => {
+        replaceAllMatches();
+    });
+}
+if (replaceButton) {
+    replaceButton.addEventListener("click", () => {
+        replaceCurrentMatch(true);
+    });
+}
+
 // Handle "open with" functionality from Tauri
 async function handleOpenWithFile(filePath, mode) {
     try {
@@ -785,4 +1815,5 @@ async function handleOpenWithFile(filePath, mode) {
 
 let loader = new WebDataLoader();
 loader.loadObject(welcome);
+setCurrentRootLoader(loader, "welcome");
 renderJSON(loader);

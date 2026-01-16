@@ -20,14 +20,31 @@ main {
     /* align-self: stretch; */
 }
 
+.kv-button-group {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.25rem;
+    margin-right: 0.75rem;
+    flex-shrink: 0;
+}
+
 .toggle-button {
-    position: relative;
     padding: 0;
     text-align: center;
     vertical-align: middle;
     width: 1.5rem;
-    right: 2.5rem;
-    margin-right: -1.5rem;
     align-self: flex-start;
     flex-shrink: 0;
+}
+
+.kv.search-current {
+    background-color: #fff3cd;
+    border-radius: 0.25rem;
+    padding: 0.1rem 0.25rem;
+}
+
+.match-highlight {
+    background-color: #cfe2ff;
+    border-radius: 0.15rem;
+    padding: 0 0.15rem;
 }
