@@ -22,7 +22,7 @@ let demo = {
 };
 
 let welcome = {
-    "title": "JSON Light",
+    "title": "JSON Light+",
     "description": "A JSON viewer that displays multi-line strings in its raw format!",
     "tip": "Click the R (view raw) button in the following line",
     "banner": "\n       _  _____  ____  _   _   _      _       _     _   \n      | |/ ____|/ __ \\| \\ | | | |    (_)     | |   | |  \n      | | (___ | |  | |  \\| | | |     _  __ _| |__ | |_ \n  _   | |\\___ \\| |  | | . ` | | |    | |/ _` | '_ \\| __|\n | |__| |____) | |__| | |\\  | | |____| | (_| | | | | |_ \n  \\____/|_____/ \\____/|_| \\_| |______|_|\\__, |_| |_|\\__|\n                                         __/ |          \n                                        |___/           \n"
@@ -2250,6 +2250,20 @@ pasteArea.addEventListener("change", (ev) => {
 });
 if (pasteArea.value != "") {
     renderJsonStr(pasteArea.value);
+}
+
+const pasteToggleButton = document.querySelector("#paste-toggle-button");
+const pasteCollapse = document.querySelector("#paste-collapse");
+if (pasteToggleButton && pasteCollapse) {
+    pasteCollapse.addEventListener("show.bs.collapse", () => {
+        pasteToggleButton.textContent = "-";
+    });
+    pasteCollapse.addEventListener("hide.bs.collapse", () => {
+        pasteToggleButton.textContent = "+";
+    });
+    if (!pasteCollapse.classList.contains("show")) {
+        pasteToggleButton.textContent = "+";
+    }
 }
 
 let filePicker = document.querySelector("#filepicker");
