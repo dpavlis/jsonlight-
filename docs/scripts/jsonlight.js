@@ -2444,6 +2444,8 @@ let bulkToggleInput = null;
 let bulkDeleteButton = null;
 let bulkDeleteContainer = null;
 let bulkSelectionCountLabel = null;
+let expandCollapseToggleButton = null;
+let expandCollapseToggleState = "collapsed";
 
 updateTopLevelNavigator();
 
@@ -2621,6 +2623,7 @@ function setCurrentRootLoader(loader, mode) {
 
 function clearCurrentRootLoader() {
     setCurrentRootLoader(null, null);
+    setExpandCollapseToggleState(false);
 }
 
 function updateDownloadButtons() {
@@ -2752,6 +2755,7 @@ function renderJSON(loader) {
         rootButton.click();
     }
     requestSearchRefresh();
+    setExpandCollapseToggleState(false);
 }
 function tryExtractJsonErrorPosition(message, sourceText) {
     if (!message) return null;
@@ -3080,20 +3084,32 @@ lineInput.addEventListener("keypress", (ev) => {
     }
 });
 
-// Expand All / Collapse All functionality
-let expandAllButton = document.querySelector("#expand-all");
-expandAllButton.addEventListener("click", async (ev) => {
-    await expandAll();
-});
-
-let collapseAllButton = document.querySelector("#collapse-all");
-collapseAllButton.addEventListener("click", (ev) => {
-    collapseAll();
-});
+// Expand/Collapse toggle functionality
+expandCollapseToggleButton = document.querySelector("#expand-collapse-toggle");
+if (expandCollapseToggleButton) {
+    setExpandCollapseToggleState(false);
+    expandCollapseToggleButton.addEventListener("click", async () => {
+        const shouldExpand = expandCollapseToggleState !== "expanded";
+        expandCollapseToggleButton.disabled = true;
+        try {
+            if (shouldExpand) {
+                const expanded = await expandAll();
+                setExpandCollapseToggleState(expanded ? true : false);
+            }
+            else {
+                collapseAll();
+                setExpandCollapseToggleState(false);
+            }
+        }
+        finally {
+            expandCollapseToggleButton.disabled = false;
+        }
+    });
+}
 
 async function expandAll() {
     const root = document.querySelector("#view .kv-root");
-    if (!root) return;
+    if (!root) return false;
     const queue = [root];
     let processed = 0;
     const yieldInterval = 40;
@@ -3108,6 +3124,7 @@ async function expandAll() {
             await yieldToEventLoop();
         }
     }
+    return true;
 }
 
 function expandKvRootImmediate(kvRoot) {
@@ -3154,6 +3171,16 @@ function collapseAll() {
             collapseButton.setAttribute("aria-expanded", "false");
         }
     });
+}
+
+function setExpandCollapseToggleState(isExpanded) {
+    expandCollapseToggleState = isExpanded ? "expanded" : "collapsed";
+    if (!expandCollapseToggleButton) return;
+    expandCollapseToggleButton.dataset.state = expandCollapseToggleState;
+    expandCollapseToggleButton.textContent = isExpanded ? "Collapse All" : "Expand All";
+    expandCollapseToggleButton.classList.toggle("btn-outline-primary", !isExpanded);
+    expandCollapseToggleButton.classList.toggle("btn-outline-secondary", isExpanded);
+    expandCollapseToggleButton.setAttribute("aria-pressed", isExpanded ? "true" : "false");
 }
 
 let editingToggle = document.querySelector("#toggle-editing");

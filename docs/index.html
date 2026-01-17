@@ -82,9 +82,16 @@
         </div>
       </div>
       <div class="mt-3">
-        <div class="d-flex gap-2">
-          <button type="button" class="btn btn-outline-primary btn-sm flex-fill" id="expand-all" title="Expand all nodes">Expand All</button>
-          <button type="button" class="btn btn-outline-secondary btn-sm flex-fill" id="collapse-all" title="Collapse all nodes">Collapse All</button>
+        <div class="d-flex">
+          <button
+            type="button"
+            class="btn btn-outline-primary btn-sm flex-fill"
+            id="expand-collapse-toggle"
+            title="Expand or collapse all nodes"
+            aria-pressed="false"
+          >
+            Expand All
+          </button>
         </div>
       </div>
       <div class="mt-3">
@@ -106,8 +113,24 @@
           <datalist id="search-history-options"></datalist>
         </div>
         <div class="d-flex gap-2 mb-2">
-          <button class="btn btn-outline-secondary btn-sm flex-fill" type="button" id="search-prev" aria-label="Previous match" title="Go to previous search match">[&lt;]</button>
-          <button class="btn btn-outline-secondary btn-sm flex-fill" type="button" id="search-next" aria-label="Next match" title="Go to next search match">[&gt;]</button>
+          <button
+            class="btn btn-light btn-sm btn-icon btn-icon-large toggle-button"
+            type="button"
+            id="search-prev"
+            aria-label="Previous match"
+            title="Go to previous search match"
+          >
+            ◂
+          </button>
+          <button
+            class="btn btn-light btn-sm btn-icon btn-icon-large toggle-button"
+            type="button"
+            id="search-next"
+            aria-label="Next match"
+            title="Go to next search match"
+          >
+            ▸
+          </button>
         </div>
         <div class="d-flex justify-content-between align-items-center">
           <div class="form-check form-check-inline mb-0">
@@ -132,8 +155,24 @@
             <datalist id="replace-history-options"></datalist>
           </div>
           <div class="d-flex gap-2">
-            <button class="btn btn-outline-secondary btn-sm flex-fill" type="button" id="replace-all" title="Replace every match">[ALL]</button>
-            <button class="btn btn-outline-secondary btn-sm flex-fill" type="button" id="replace-current" title="Replace current match">[R]</button>
+            <button
+              class="btn btn-outline-secondary btn-sm flex-fill btn-text-small"
+              type="button"
+              id="replace-current"
+              aria-label="Replace current match"
+              title="Replace current match"
+            >
+              Replace
+            </button>
+            <button
+              class="btn btn-outline-secondary btn-sm flex-fill btn-text-small"
+              type="button"
+              id="replace-all"
+              aria-label="Replace every match"
+              title="Replace every match"
+            >
+              Replace All
+            </button>
           </div>
         </div>
       </div>
