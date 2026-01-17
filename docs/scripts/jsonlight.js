@@ -1,26 +1,26 @@
-let long_demo = {
-    "string": "This is a string value\nThis the second line",
-    "number": 123.456,
-    "list": ["elem1", "elem2", "elem3", "elem4", "elem5", "elem6",
-             "elem7", "elem8", "elem9", "elem10", "elem11", "elem12",
-             "elem13", "elem14", "elem15", "elem16", "elem17", "elem18"],
-    "boolean": true,
-    "null": null
-};
+/*************************************
+ *        CONSTANTS                  *
+ *************************************/
 
-let demo = {
-    "string": "This is a string value\nThis the second line\n" +
-              "Test HTML tags: <span> content </span>\n",
-    "number": 123.456,
-    "list": ["elem1", "elem2"],
-    "boolean": true,
-    "null": null,
-    "long-demo": long_demo,
-    "empty-list": [],
-    "empty-object": {},
-    "long-string": "Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long Very Long "
-};
+// Number of characters to capture on each side of a parse error for the preview snippet.
+const JSON_PARSE_CONTEXT_RADIUS = 50;
 
+// Maximum count of recent search queries remembered for the dropdown history.
+const SEARCH_HISTORY_LIMIT = 12;
+
+// Maximum count of replacement strings remembered for the dropdown history.
+const REPLACE_HISTORY_LIMIT = 12;
+
+// Delay (in milliseconds) before persisting a search query to history after typing stops.
+const SEARCH_HISTORY_COMMIT_DELAY = 500;
+
+// Suggested regex samples shown in the search dropdown to help users craft patterns.
+const SEARCH_REGEX_EXAMPLES = [
+    String.raw`toDate\((?:(?!;).)+\)`,
+    String.raw`\bhttps?://[^\s]+`,
+    String.raw`"errorCode"\s*:\s*\d+`,
+    String.raw`(?<="userId"\s*:\s?")([^"\s]+)`
+];
 let welcome = {
     "title": "JSON Light+",
     "description": "A JSON viewer/editor that displays multi-line strings in its raw format and let's you edit it!",
@@ -409,15 +409,6 @@ const searchHistoryList = document.querySelector("#search-history-options");
 const replaceHistoryList = document.querySelector("#replace-history-options");
 const SEARCH_HISTORY_STORAGE_KEY = "jsonlight.searchHistory";
 const REPLACE_HISTORY_STORAGE_KEY = "jsonlight.replaceHistory";
-const SEARCH_HISTORY_LIMIT = 12;
-const REPLACE_HISTORY_LIMIT = 12;
-const SEARCH_HISTORY_COMMIT_DELAY = 500;
-const SEARCH_REGEX_EXAMPLES = [
-    String.raw`toDate\((?:(?!;).)+\)`,
-    String.raw`\bhttps?://[^\s]+`,
-    String.raw`"errorCode"\s*:\s*\d+`,
-    String.raw`(?<="userId"\s*:\s?")([^"\s]+)`
-];
 let searchHistoryValues = [];
 let replaceHistoryValues = [];
 let searchHistoryCommitHandle = null;
@@ -2762,9 +2753,6 @@ function renderJSON(loader) {
     }
     requestSearchRefresh();
 }
-
-const JSON_PARSE_CONTEXT_RADIUS = 50; //how many characters before/after the error position to include
-
 function tryExtractJsonErrorPosition(message, sourceText) {
     if (!message) return null;
     const positionMatch = message.match(/position\s+(\d+)/i);
