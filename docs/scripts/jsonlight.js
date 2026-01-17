@@ -519,7 +519,10 @@ async function restoreExpandedPaths(paths) {
         .filter((path) => Array.isArray(path) && path.length > 0)
         .map(async (path) => {
             try {
-                await ensurePathRendered(path);
+                const kvRoot = await ensurePathRendered(path);
+                if (kvRoot) {
+                    await expandKvRoot(kvRoot);
+                }
             }
             catch (error) {
                 console.warn("Failed to restore expanded path", path, error);
