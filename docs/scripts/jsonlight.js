@@ -28,6 +28,22 @@ let welcome = {
     "banner": "\n     _ ____   ___  _   _ _     ___      _     _            \n    | / ___| / _ \\| \\ | | |   |_ _|__ _| |__ | |_      _   \n _  | \\\\___ \\ | | |   \\ | |    | |/ _` | '_ \\| __|   _| |_ \n| |_| |___) | |_| | |\\  | |___ | | (_| | | | | |_   |_   _|\n \\___/|____/ \\___/|_| \\_|_____|___\\__, |_| |_|\\__|    |_|  \n                                  |___/                    \n"
 }
 
+// Text inserted when pressing Tab with no selection: use "\t" for hard tab, or spaces for soft tabs.
+const PROPERTY_EDITOR_TAB_INSERTION = "\t";
+// Number of leading spaces added/removed for multi-line indent; supply any string (e.g., two spaces).
+const PROPERTY_EDITOR_INDENT_STEP = "  ";
+
+
+
+const PROPERTY_EDITOR_MIN_WIDTH = 460;
+const PROPERTY_EDITOR_MIN_HEIGHT = 320;
+const PROPERTY_EDITOR_MAX_WIDTH = 1400;
+const PROPERTY_EDITOR_MAX_HEIGHT = 1100;
+const PROPERTY_EDITOR_MAX_WIDTH_RATIO = 0.95;
+const PROPERTY_EDITOR_MAX_HEIGHT_RATIO = 0.9;
+const PROPERTY_EDITOR_LAYOUT_STORAGE_KEY = "jsonlight.propertyEditorLayout";
+const PROPERTY_EDITOR_VIEWPORT_MARGIN = 24;
+
 /*************************************
  *        Property Editor Modal      *
  *************************************/
@@ -67,15 +83,6 @@ const propertyEditorDragState = {
     currentY: 0,
     initialized: false
 };
-
-const PROPERTY_EDITOR_MIN_WIDTH = 460;
-const PROPERTY_EDITOR_MIN_HEIGHT = 320;
-const PROPERTY_EDITOR_MAX_WIDTH = 1400;
-const PROPERTY_EDITOR_MAX_HEIGHT = 1100;
-const PROPERTY_EDITOR_MAX_WIDTH_RATIO = 0.95;
-const PROPERTY_EDITOR_MAX_HEIGHT_RATIO = 0.9;
-const PROPERTY_EDITOR_LAYOUT_STORAGE_KEY = "jsonlight.propertyEditorLayout";
-const PROPERTY_EDITOR_VIEWPORT_MARGIN = 24;
 
 const propertyEditorResizeState = {
     dialog: null,
@@ -504,6 +511,112 @@ function schedulePropertyEditorCaretUpdate() {
     }
 }
 
+function handlePropertyEditorKeyDown(event) {
+    if (event.key !== "Tab" || event.altKey || event.metaKey || event.ctrlKey || !propertyEditorState.textarea) {
+        return;
+    }
+    const textarea = propertyEditorState.textarea;
+    const selectionStart = textarea.selectionStart ?? 0;
+    const selectionEnd = textarea.selectionEnd ?? 0;
+    const selectionLength = Math.abs(selectionEnd - selectionStart);
+    event.preventDefault();
+    if (selectionLength === 0 && !event.shiftKey) {
+        const insertion = PROPERTY_EDITOR_TAB_INSERTION ?? "\t";
+        textarea.setRangeText(insertion, selectionStart, selectionEnd, "end");
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+        schedulePropertyEditorCaretUpdate();
+        return;
+    }
+    const handled = indentPropertyEditorSelectedLines(event.shiftKey ? -1 : 1, {
+        includeCurrentLineWhenEmpty: event.shiftKey && selectionLength === 0
+    });
+    if (!handled) {
+        schedulePropertyEditorCaretUpdate();
+    }
+}
+
+function indentPropertyEditorSelectedLines(direction, options = {}) {
+    if (!propertyEditorState.textarea) return false;
+    const textarea = propertyEditorState.textarea;
+    const value = textarea.value ?? "";
+    let start = textarea.selectionStart ?? 0;
+    let end = textarea.selectionEnd ?? 0;
+    if (start > end) {
+        [start, end] = [end, start];
+    }
+    const allowEmptySelection = !!options.includeCurrentLineWhenEmpty;
+    if (start === end && !allowEmptySelection) {
+        return false;
+    }
+    if (!value.length) {
+        return false;
+    }
+    const { rangeStart, rangeEnd } = expandPropertyEditorSelectionToLines(value, start, end, allowEmptySelection);
+    if (rangeStart === rangeEnd) {
+        return false;
+    }
+    const block = value.slice(rangeStart, rangeEnd);
+    const lines = block.split("\n");
+    const indentToken = PROPERTY_EDITOR_INDENT_STEP ?? "";
+    const indentLength = indentToken.length;
+    if (!indentLength) {
+        return false;
+    }
+    let newBlock;
+    if (direction > 0) {
+        newBlock = lines.map((line) => indentToken + line).join("\n");
+    }
+    else {
+        const canOutdent = lines.every((line) => line.startsWith(indentToken));
+        if (!canOutdent) {
+            return false;
+        }
+        const updatedLines = lines.map((line) => line.slice(indentLength));
+        newBlock = updatedLines.join("\n");
+    }
+    textarea.setRangeText(newBlock, rangeStart, rangeEnd, "end");
+    const newSelectionEnd = rangeStart + newBlock.length;
+    textarea.setSelectionRange(rangeStart, newSelectionEnd);
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    schedulePropertyEditorCaretUpdate();
+    return true;
+}
+
+function expandPropertyEditorSelectionToLines(value, start, end, allowEmptySelection) {
+    const hasSelection = start !== end;
+    if (!hasSelection && !allowEmptySelection) {
+        return { rangeStart: start, rangeEnd: end };
+    }
+    let rangeStart = start;
+    let rangeEnd = end;
+    if (!hasSelection && allowEmptySelection) {
+        rangeStart = getPropertyEditorLineBoundaryStart(value, start);
+        rangeEnd = getPropertyEditorLineBoundaryEnd(value, end);
+    }
+    else {
+        rangeStart = getPropertyEditorLineBoundaryStart(value, start);
+        rangeEnd = getPropertyEditorLineBoundaryEnd(value, end);
+    }
+    return { rangeStart, rangeEnd };
+}
+
+function getPropertyEditorLineBoundaryStart(value, index) {
+    let cursor = Math.max(index, 0);
+    while (cursor > 0 && value.charAt(cursor - 1) !== "\n") {
+        cursor -= 1;
+    }
+    return cursor;
+}
+
+function getPropertyEditorLineBoundaryEnd(value, index) {
+    let cursor = Math.max(Math.min(index, value.length), 0);
+    const length = value.length;
+    while (cursor < length && value.charAt(cursor) !== "\n") {
+        cursor += 1;
+    }
+    return cursor;
+}
+
 function updatePropertyEditorSearchControls() {
     const hasQuery = !!(propertyEditorState.searchInput && propertyEditorState.searchInput.value);
     if (propertyEditorState.searchPrevButton) propertyEditorState.searchPrevButton.disabled = !hasQuery;
@@ -677,6 +790,7 @@ if (propertyEditorState.textarea) {
             schedulePropertyEditorCaretUpdate();
         });
     });
+    propertyEditorState.textarea.addEventListener("keydown", handlePropertyEditorKeyDown);
 }
 
 if (propertyEditorState.searchInput) {
