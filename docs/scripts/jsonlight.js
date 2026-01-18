@@ -104,6 +104,40 @@ const propertyEditorLayoutState = {
     loaded: false
 };
 
+/*************************************
+ *        App Configuration          *
+ *************************************/
+const APP_CONFIG_STORAGE_KEY = "jsonlight.appConfig";
+const APP_CONFIG_MIN_PAGE_SIZE = 50;
+const APP_CONFIG_MAX_PAGE_SIZE = 2000;
+const APP_CONFIG_MIN_INDENT_SIZE = 1;
+const APP_CONFIG_MAX_INDENT_SIZE = 8;
+const APP_CONFIG_DEFAULTS = {
+    pageSize: 500,
+    tabInsertion: PROPERTY_EDITOR_TAB_INSERTION,
+    indentSize: PROPERTY_EDITOR_INDENT_STEP.length || 2
+};
+
+const appConfigState = {
+    current: loadAppConfigFromStorage(),
+    modalElement: document.querySelector("#app-settings-modal"),
+    modal: null,
+    openButton: document.querySelector("#open-settings-button"),
+    form: document.querySelector("#app-settings-form"),
+    pageSizeInput: document.querySelector("#config-page-size"),
+    tabInsertionInput: document.querySelector("#config-tab-insertion"),
+    indentSizeInput: document.querySelector("#config-indent-size"),
+    errorLabel: document.querySelector("#app-settings-error")
+};
+
+const runtimeFormattingState = {
+    tabInsertion: PROPERTY_EDITOR_TAB_INSERTION,
+    indentSize: APP_CONFIG_DEFAULTS.indentSize,
+    indentToken: PROPERTY_EDITOR_INDENT_STEP
+};
+
+updateRuntimeFormattingSettings();
+
 function initializePropertyEditorDragSupport() {
     if (propertyEditorDragState.initialized || !propertyEditorState.modalElement) return;
     const dialog = propertyEditorState.modalElement.querySelector(".modal-dialog");
@@ -521,7 +555,7 @@ function handlePropertyEditorKeyDown(event) {
     const selectionLength = Math.abs(selectionEnd - selectionStart);
     event.preventDefault();
     if (selectionLength === 0 && !event.shiftKey) {
-        const insertion = PROPERTY_EDITOR_TAB_INSERTION ?? "\t";
+        const insertion = getConfiguredTabInsertion();
         textarea.setRangeText(insertion, selectionStart, selectionEnd, "end");
         textarea.dispatchEvent(new Event("input", { bubbles: true }));
         schedulePropertyEditorCaretUpdate();
@@ -557,7 +591,7 @@ function indentPropertyEditorSelectedLines(direction, options = {}) {
     }
     const block = value.slice(rangeStart, rangeEnd);
     const lines = block.split("\n");
-    const indentToken = PROPERTY_EDITOR_INDENT_STEP ?? "";
+    const indentToken = getConfiguredIndentToken();
     const indentLength = indentToken.length;
     if (!indentLength) {
         return false;
@@ -819,6 +853,236 @@ if (propertyEditorState.replaceAllButton) {
 }
 
 updatePropertyEditorSearchControls();
+initializeAppConfigUI();
+
+function initializeAppConfigUI() {
+    if (!appConfigState.modalElement) return;
+    try {
+        appConfigState.modal = new bootstrap.Modal(appConfigState.modalElement);
+    }
+    catch (error) {
+        console.warn("Unable to initialize settings modal", error);
+    }
+    appConfigState.modalElement.addEventListener("shown.bs.modal", () => {
+        populateAppConfigForm();
+        if (appConfigState.pageSizeInput) {
+            appConfigState.pageSizeInput.focus();
+            appConfigState.pageSizeInput.select();
+        }
+    });
+    appConfigState.modalElement.addEventListener("hidden.bs.modal", () => {
+        setAppConfigError("");
+    });
+    if (appConfigState.openButton) {
+        appConfigState.openButton.addEventListener("click", () => {
+            populateAppConfigForm();
+            if (appConfigState.modal) {
+                appConfigState.modal.show();
+            }
+        });
+    }
+    if (appConfigState.form) {
+        appConfigState.form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            await handleAppConfigSave();
+        });
+    }
+}
+
+function populateAppConfigForm() {
+    if (appConfigState.pageSizeInput) {
+        appConfigState.pageSizeInput.value = `${getConfiguredPageSize()}`;
+    }
+    if (appConfigState.tabInsertionInput) {
+        appConfigState.tabInsertionInput.value = escapeTabInsertionForDisplay(getConfiguredTabInsertion());
+    }
+    if (appConfigState.indentSizeInput) {
+        appConfigState.indentSizeInput.value = `${runtimeFormattingState.indentSize}`;
+    }
+    setAppConfigError("");
+}
+
+function setAppConfigError(message) {
+    if (!appConfigState.errorLabel) return;
+    appConfigState.errorLabel.textContent = message || "";
+}
+
+async function handleAppConfigSave() {
+    if (!appConfigState.form) return;
+    setAppConfigError("");
+    const parsedPageSize = Number.parseInt(appConfigState.pageSizeInput ? appConfigState.pageSizeInput.value : "", 10);
+    if (!Number.isFinite(parsedPageSize)) {
+        setAppConfigError(`Enter a valid page size between ${APP_CONFIG_MIN_PAGE_SIZE} and ${APP_CONFIG_MAX_PAGE_SIZE}.`);
+        if (appConfigState.pageSizeInput) {
+            appConfigState.pageSizeInput.focus();
+        }
+        return;
+    }
+    const parsedIndentSize = Number.parseInt(appConfigState.indentSizeInput ? appConfigState.indentSizeInput.value : "", 10);
+    if (!Number.isFinite(parsedIndentSize)) {
+        setAppConfigError(`Enter an indent size between ${APP_CONFIG_MIN_INDENT_SIZE} and ${APP_CONFIG_MAX_INDENT_SIZE}.`);
+        if (appConfigState.indentSizeInput) {
+            appConfigState.indentSizeInput.focus();
+        }
+        return;
+    }
+    const rawTabValue = appConfigState.tabInsertionInput ? appConfigState.tabInsertionInput.value : "";
+    const interpretedTabValue = interpretTabInsertionInput(rawTabValue);
+    if (!interpretedTabValue) {
+        setAppConfigError("Tab insertion value cannot be empty.");
+        if (appConfigState.tabInsertionInput) {
+            appConfigState.tabInsertionInput.focus();
+        }
+        return;
+    }
+    const nextConfig = {
+        pageSize: clampPageSize(parsedPageSize),
+        indentSize: clampIndentSize(parsedIndentSize),
+        tabInsertion: ensureValidTabInsertion(interpretedTabValue)
+    };
+    appConfigState.current = nextConfig;
+    updateRuntimeFormattingSettings();
+    persistAppConfigToStorage(appConfigState.current);
+    await refreshPaginationAfterConfigChange();
+    if (appConfigState.modal) {
+        appConfigState.modal.hide();
+    }
+}
+
+function loadAppConfigFromStorage() {
+    const storage = getLocalStorageSafe();
+    if (!storage) {
+        return { ...APP_CONFIG_DEFAULTS };
+    }
+    try {
+        const raw = storage.getItem(APP_CONFIG_STORAGE_KEY);
+        if (!raw) {
+            return { ...APP_CONFIG_DEFAULTS };
+        }
+        const parsed = JSON.parse(raw);
+        const nextConfig = {
+            pageSize: clampPageSize(parsed.pageSize),
+            tabInsertion: ensureValidTabInsertion(parsed.tabInsertion),
+            indentSize: clampIndentSize(parsed.indentSize)
+        };
+        return nextConfig;
+    }
+    catch (error) {
+        console.warn("Unable to load saved preferences", error);
+        return { ...APP_CONFIG_DEFAULTS };
+    }
+}
+
+function persistAppConfigToStorage(config) {
+    const storage = getLocalStorageSafe();
+    if (!storage) return;
+    try {
+        storage.setItem(APP_CONFIG_STORAGE_KEY, JSON.stringify(config));
+    }
+    catch (error) {
+        console.warn("Unable to save preferences", error);
+    }
+}
+
+function updateRuntimeFormattingSettings() {
+    const sanitizedPageSize = clampPageSize(appConfigState.current?.pageSize);
+    const sanitizedIndentSize = clampIndentSize(appConfigState.current?.indentSize);
+    const sanitizedTabInsertion = ensureValidTabInsertion(appConfigState.current?.tabInsertion);
+    appConfigState.current = {
+        pageSize: sanitizedPageSize,
+        indentSize: sanitizedIndentSize,
+        tabInsertion: sanitizedTabInsertion
+    };
+    runtimeFormattingState.tabInsertion = sanitizedTabInsertion;
+    runtimeFormattingState.indentSize = sanitizedIndentSize;
+    runtimeFormattingState.indentToken = buildIndentToken(sanitizedIndentSize);
+}
+
+function getConfiguredTabInsertion() {
+    return runtimeFormattingState.tabInsertion || PROPERTY_EDITOR_TAB_INSERTION || "\t";
+}
+
+function getConfiguredIndentToken() {
+    return runtimeFormattingState.indentToken || PROPERTY_EDITOR_INDENT_STEP || "  ";
+}
+
+function getConfiguredPageSize() {
+    return appConfigState.current?.pageSize || APP_CONFIG_DEFAULTS.pageSize;
+}
+
+function clampPageSize(value) {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed)) {
+        return APP_CONFIG_DEFAULTS.pageSize;
+    }
+    return Math.min(Math.max(parsed, APP_CONFIG_MIN_PAGE_SIZE), APP_CONFIG_MAX_PAGE_SIZE);
+}
+
+function clampIndentSize(value) {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed)) {
+        return APP_CONFIG_DEFAULTS.indentSize;
+    }
+    return Math.min(Math.max(parsed, APP_CONFIG_MIN_INDENT_SIZE), APP_CONFIG_MAX_INDENT_SIZE);
+}
+
+function ensureValidTabInsertion(value) {
+    if (typeof value !== "string" || value.length === 0) {
+        return PROPERTY_EDITOR_TAB_INSERTION;
+    }
+    return value;
+}
+
+function buildIndentToken(indentSize) {
+    const safeSize = Math.max(indentSize || APP_CONFIG_DEFAULTS.indentSize, 1);
+    return " ".repeat(safeSize);
+}
+
+function escapeTabInsertionForDisplay(value) {
+    if (!value) return "";
+    return value
+        .replace(/\\/g, "\\\\")
+        .replace(/\t/g, "\\t")
+        .replace(/\n/g, "\\n")
+        .replace(/\r/g, "\\r")
+        .replace(/ /g, "\\s");
+}
+
+function interpretTabInsertionInput(value) {
+    if (typeof value !== "string" || !value.length) {
+        return "";
+    }
+    return value.replace(/\\(\\|t|n|r|s)/g, (_, code) => {
+        switch (code) {
+            case "t": return "\t";
+            case "n": return "\n";
+            case "r": return "\r";
+            case "s": return " ";
+            case "\\": return "\\";
+            default: return `\\${code}`;
+        }
+    });
+}
+
+async function refreshPaginationAfterConfigChange() {
+    if (topLevelState.mode !== "json-array") {
+        resetTopLevelPaginationState();
+        return;
+    }
+    const desiredPageSize = getConfiguredPageSize();
+    topLevelPaginationState.pageSize = desiredPageSize;
+    if (topLevelState.count <= desiredPageSize) {
+        resetTopLevelPaginationState();
+        return;
+    }
+    const kvRoot = topLevelPaginationState.kvRoot || document.querySelector("#view .kv-root");
+    if (!kvRoot) {
+        resetTopLevelPaginationState();
+        return;
+    }
+    initializeTopLevelPagination(kvRoot);
+    await renderTopLevelPage(topLevelPaginationState.currentPage, { forceRerender: true });
+}
 
 /*************************************
  *              Search               *
@@ -846,10 +1110,9 @@ let searchRefreshHandle = null;
 let replaceInput = document.querySelector("#replace-input");
 let replaceAllButton = document.querySelector("#replace-all");
 let replaceButton = document.querySelector("#replace-current");
-const TOP_LEVEL_PAGE_SIZE = 500;
 const topLevelPaginationState = {
     enabled: false,
-    pageSize: TOP_LEVEL_PAGE_SIZE,
+    pageSize: getConfiguredPageSize(),
     totalItems: 0,
     totalPages: 1,
     currentPage: 1,
@@ -1021,6 +1284,7 @@ function applyTopLevelHighlight(kvElement, rootElement, durationMs = 4000) {
 
 function resetTopLevelPaginationState() {
     topLevelPaginationState.enabled = false;
+    topLevelPaginationState.pageSize = getConfiguredPageSize();
     topLevelPaginationState.totalItems = 0;
     topLevelPaginationState.totalPages = 1;
     topLevelPaginationState.currentPage = 1;
@@ -1030,13 +1294,14 @@ function resetTopLevelPaginationState() {
 }
 
 function initializeTopLevelPagination(kvRoot) {
-    if (!kvRoot || topLevelState.mode !== "json-array" || topLevelState.count <= TOP_LEVEL_PAGE_SIZE) {
+    const configuredPageSize = getConfiguredPageSize();
+    if (!kvRoot || topLevelState.mode !== "json-array" || topLevelState.count <= configuredPageSize) {
         resetTopLevelPaginationState();
         return;
     }
     const previousPage = topLevelPaginationState.enabled ? topLevelPaginationState.currentPage : 1;
     topLevelPaginationState.enabled = true;
-    topLevelPaginationState.pageSize = TOP_LEVEL_PAGE_SIZE;
+    topLevelPaginationState.pageSize = configuredPageSize;
     topLevelPaginationState.totalItems = topLevelState.count;
     topLevelPaginationState.totalPages = Math.max(1, Math.ceil(topLevelPaginationState.totalItems / topLevelPaginationState.pageSize));
     topLevelPaginationState.currentPage = Math.min(Math.max(previousPage, 1), topLevelPaginationState.totalPages);
@@ -1050,7 +1315,7 @@ function getTopLevelPageRange(pageNumber) {
     if (!topLevelPaginationState.enabled || safeTotal === 0) {
         return { start: 0, end: 0 };
     }
-    const pageSize = topLevelPaginationState.pageSize || TOP_LEVEL_PAGE_SIZE;
+    const pageSize = topLevelPaginationState.pageSize || getConfiguredPageSize();
     const clampedPage = Math.min(Math.max(pageNumber, 1), topLevelPaginationState.totalPages || 1);
     const startIndex = (clampedPage - 1) * pageSize;
     const endIndex = Math.min(startIndex + pageSize, safeTotal);
@@ -1089,7 +1354,7 @@ function updateTopLevelPaginationControls() {
 }
 
 function getPageForTopLevelIndex(index) {
-    const pageSize = topLevelPaginationState.pageSize || TOP_LEVEL_PAGE_SIZE;
+    const pageSize = topLevelPaginationState.pageSize || getConfiguredPageSize();
     if (!Number.isFinite(index) || index < 0) return 1;
     return Math.floor(index / pageSize) + 1;
 }
@@ -1122,7 +1387,7 @@ async function renderTopLevelPage(pageNumber, options = {}) {
     const childList = options.childListOverride || collapseWrapper.querySelector(".child-list");
     if (!childList) return false;
 
-    const pageSize = topLevelPaginationState.pageSize || TOP_LEVEL_PAGE_SIZE;
+    const pageSize = topLevelPaginationState.pageSize || getConfiguredPageSize();
     const children = kvRoot.loader.getChild();
     const totalItems = Math.max(children.length, 0);
     topLevelPaginationState.totalItems = totalItems;
