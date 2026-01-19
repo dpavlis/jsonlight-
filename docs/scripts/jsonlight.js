@@ -78,6 +78,15 @@ const propertyEditorState = {
     caretUpdateHandle: null,
 };
 
+const propertyRenameState = {
+    modalElement: document.querySelector("#property-rename-modal"),
+    input: document.querySelector("#property-rename-input"),
+    applyButton: document.querySelector("#property-rename-apply"),
+    errorLabel: document.querySelector("#property-rename-error"),
+    modal: null,
+    currentKvRoot: null
+};
+
 const propertyEditorSearchState = {
     lastQuery: "",
     lastDirection: 1,
@@ -811,6 +820,20 @@ if (propertyEditorState.modalElement) {
     });
 }
 
+if (propertyRenameState.modalElement) {
+    propertyRenameState.modal = new bootstrap.Modal(propertyRenameState.modalElement);
+    propertyRenameState.modalElement.addEventListener("shown.bs.modal", () => {
+        if (!propertyRenameState.input) return;
+        propertyRenameState.input.focus();
+        propertyRenameState.input.select();
+    });
+    propertyRenameState.modalElement.addEventListener("hidden.bs.modal", () => {
+        propertyRenameState.currentKvRoot = null;
+        if (propertyRenameState.input) propertyRenameState.input.value = "";
+        setPropertyRenameError("");
+    });
+}
+
 initializePropertyEditorDragSupport();
 initializePropertyEditorResizeSupport();
 
@@ -871,6 +894,36 @@ if (propertyEditorState.keyInput) {
             ev.preventDefault();
             hidePropertyEditorKeyEditor();
             updatePropertyEditorKeyUI(propertyEditorState.currentKvRoot);
+        }
+    });
+}
+
+if (propertyRenameState.input) {
+    propertyRenameState.input.addEventListener("input", () => {
+        setPropertyRenameError("");
+    });
+    propertyRenameState.input.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+            ev.preventDefault();
+            if (propertyRenameState.applyButton) {
+                propertyRenameState.applyButton.click();
+            }
+        }
+    });
+}
+
+if (propertyRenameState.applyButton) {
+    propertyRenameState.applyButton.addEventListener("click", () => {
+        const result = applyPropertyRename();
+        if (!result.success) {
+            if (propertyRenameState.input) {
+                propertyRenameState.input.focus();
+                propertyRenameState.input.select();
+            }
+            return;
+        }
+        if (propertyRenameState.modal) {
+            propertyRenameState.modal.hide();
         }
     });
 }
@@ -2695,7 +2748,14 @@ function addEditButton(kvRoot) {
     editButton.classList.add("toggle-button", "edit-button", "btn-icon-large");
     editButton.addEventListener("click", (ev) => {
         ev.stopPropagation();
-        openPropertyEditor(kvRoot);
+        const loader = kvRoot ? kvRoot.loader : null;
+        const value = loader ? loader.getValue() : null;
+        if (Array.isArray(value)) {
+            openPropertyRenameEditor(kvRoot);
+        }
+        else {
+            openPropertyEditor(kvRoot);
+        }
     });
 
     let buttonGroup = ensureButtonGroup(kvRoot);
@@ -2826,6 +2886,73 @@ function updateKvRootKeyLabel(kvRoot, key) {
     if (keyElement) {
         keyElement.textContent = formatPropertyEditorKeyLabel(key);
     }
+}
+
+function setPropertyRenameError(message) {
+    if (!propertyRenameState.errorLabel) return;
+    if (message) {
+        propertyRenameState.errorLabel.textContent = message;
+        propertyRenameState.errorLabel.classList.remove("d-none");
+    }
+    else {
+        propertyRenameState.errorLabel.textContent = "";
+        propertyRenameState.errorLabel.classList.add("d-none");
+    }
+}
+
+function openPropertyRenameEditor(kvRoot) {
+    if (!propertyRenameState.modal || !propertyRenameState.input) return;
+    const loader = kvRoot ? kvRoot.loader : null;
+    if (!isPropertyEditorKeyEditable(loader)) return;
+    propertyRenameState.currentKvRoot = kvRoot;
+    propertyRenameState.input.value = loader.parentKey ?? "";
+    setPropertyRenameError("");
+    propertyRenameState.modal.show();
+}
+
+function applyPropertyRename() {
+    const kvRoot = propertyRenameState.currentKvRoot;
+    const loader = kvRoot ? kvRoot.loader : null;
+    if (!propertyRenameState.input || !loader || !isPropertyEditorKeyEditable(loader)) {
+        return { success: true, changed: false };
+    }
+    const parentValue = loader.parentLoader.getValue();
+    if (!parentValue || typeof parentValue !== "object" || Array.isArray(parentValue)) {
+        return { success: false, changed: false, reason: "parent-not-object" };
+    }
+    const oldKey = loader.parentKey;
+    const newKey = propertyRenameState.input.value;
+    if (newKey === oldKey) {
+        return { success: true, changed: false };
+    }
+    if (Object.prototype.hasOwnProperty.call(parentValue, newKey)) {
+        setPropertyRenameError("That property name already exists in this object.");
+        return { success: false, changed: false, reason: "duplicate" };
+    }
+    const oldIdentifier = getBulkSelectionIdentifier(loader);
+    const keys = Object.keys(parentValue);
+    const nextValue = {};
+    keys.forEach((key) => {
+        if (key === oldKey) {
+            nextValue[newKey] = parentValue[key];
+        }
+        else {
+            nextValue[key] = parentValue[key];
+        }
+    });
+    loader.parentLoader.value = nextValue;
+    loader.parentKey = newKey;
+    updateKvRootKeyLabel(kvRoot, newKey);
+    if (oldIdentifier && bulkSelectionState.has(oldIdentifier)) {
+        const newIdentifier = getBulkSelectionIdentifier(loader);
+        const value = bulkSelectionState.get(oldIdentifier);
+        bulkSelectionState.delete(oldIdentifier);
+        if (newIdentifier) {
+            bulkSelectionState.set(newIdentifier, loader.parentKey);
+        }
+    }
+    handleValueChanged(loader.parentLoader);
+    return { success: true, changed: true };
 }
 
 function applyPropertyEditorKeyRename(options = {}) {
@@ -3023,6 +3150,7 @@ function renderNull(kvRoot, jobj) {
 function renderArray(kvRoot, jobj) {
     let valueSpan = document.createElement("span");
     valueSpan.classList.add("json-value");
+    addEditButton(kvRoot);
     if (jobj.length == 0) {
         valueSpan.textContent = "[]";
         return valueSpan;
