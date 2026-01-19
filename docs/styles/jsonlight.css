@@ -58,6 +58,38 @@ main {
     overflow-y: auto;
 }
 
+.property-editor-key-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 1.4rem;
+    flex-wrap: wrap;
+}
+
+.property-editor-key-label {
+    flex-shrink: 0;
+}
+
+.property-editor-key-display {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    text-decoration: none;
+    line-height: 1.2;
+}
+
+.property-editor-key-display.property-editor-key-clickable {
+    cursor: pointer;
+    text-decoration: underline;
+}
+
+.property-editor-key-edit {
+    flex: 1 1 240px;
+    max-width: 520px;
+}
+
+.property-editor-key-error {
+    margin-top: -0.4rem;
+}
+
 .property-editor-input {
     flex: 1;
     min-height: 240px;

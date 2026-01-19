@@ -55,6 +55,14 @@ const propertyEditorState = {
     modalElement: document.querySelector("#property-editor-modal"),
     dialog: document.querySelector("#property-editor-modal .property-editor-dialog"),
     textarea: document.querySelector("#property-editor-input"),
+    keyRow: document.querySelector("#property-editor-key-row"),
+    keyLabel: document.querySelector("#property-editor-key-label"),
+    keyDisplay: document.querySelector("#property-editor-key-display"),
+    keyEditor: document.querySelector("#property-editor-key-edit"),
+    keyInput: document.querySelector("#property-editor-key-input"),
+    keyApplyButton: document.querySelector("#property-editor-key-apply"),
+    keyCancelButton: document.querySelector("#property-editor-key-cancel"),
+    keyErrorLabel: document.querySelector("#property-editor-key-error"),
     pathLabel: document.querySelector("#property-editor-path"),
     positionLabel: document.querySelector("#property-editor-caret"),
     searchInput: document.querySelector("#property-editor-search-input"),
@@ -796,6 +804,12 @@ if (propertyEditorState.modalElement) {
         }
         if (propertyEditorState.searchInput) propertyEditorState.searchInput.value = "";
         if (propertyEditorState.replaceInput) propertyEditorState.replaceInput.value = "";
+        if (propertyEditorState.keyInput) propertyEditorState.keyInput.value = "";
+        if (propertyEditorState.keyDisplay) propertyEditorState.keyDisplay.textContent = "";
+        if (propertyEditorState.keyLabel) propertyEditorState.keyLabel.textContent = "Property";
+        if (propertyEditorState.keyEditor) propertyEditorState.keyEditor.classList.add("d-none");
+        if (propertyEditorState.keyDisplay) propertyEditorState.keyDisplay.classList.remove("d-none");
+        setPropertyEditorKeyError("");
         setPropertyEditorSearchStatus("", "info");
     });
 }
@@ -808,6 +822,12 @@ if (propertyEditorState.applyButton) {
         if (!propertyEditorState.currentKvRoot || !propertyEditorState.textarea) return;
         const newValue = propertyEditorState.textarea.value;
         const loader = propertyEditorState.currentKvRoot.loader;
+        if (propertyEditorState.keyEditor && !propertyEditorState.keyEditor.classList.contains("d-none")) {
+            const renameResult = applyPropertyEditorKeyRename({ silent: true });
+            if (!renameResult.success) {
+                return;
+            }
+        }
         if (loader && typeof loader.updateValue === "function") {
             loader.updateValue(newValue);
         }
@@ -818,6 +838,42 @@ if (propertyEditorState.applyButton) {
         handleValueChanged(propertyEditorState.currentKvRoot.loader);
         if (propertyEditorState.modal) {
             propertyEditorState.modal.hide();
+        }
+    });
+}
+
+if (propertyEditorState.keyDisplay) {
+    propertyEditorState.keyDisplay.addEventListener("click", () => {
+        showPropertyEditorKeyEditor();
+    });
+}
+
+if (propertyEditorState.keyApplyButton) {
+    propertyEditorState.keyApplyButton.addEventListener("click", () => {
+        applyPropertyEditorKeyRename();
+    });
+}
+
+if (propertyEditorState.keyCancelButton) {
+    propertyEditorState.keyCancelButton.addEventListener("click", () => {
+        hidePropertyEditorKeyEditor();
+        updatePropertyEditorKeyUI(propertyEditorState.currentKvRoot);
+    });
+}
+
+if (propertyEditorState.keyInput) {
+    propertyEditorState.keyInput.addEventListener("input", () => {
+        setPropertyEditorKeyError("");
+    });
+    propertyEditorState.keyInput.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+            ev.preventDefault();
+            applyPropertyEditorKeyRename();
+        }
+        else if (ev.key === "Escape") {
+            ev.preventDefault();
+            hidePropertyEditorKeyEditor();
+            updatePropertyEditorKeyUI(propertyEditorState.currentKvRoot);
         }
     });
 }
@@ -2697,9 +2753,148 @@ function openPropertyEditor(kvRoot) {
     const loader = kvRoot.loader;
     const value = loader ? loader.getValue() : "";
     propertyEditorState.textarea.value = typeof value === "string" ? value : "";
+    updatePropertyEditorKeyUI(kvRoot);
     updatePropertyEditorPath(loader);
     schedulePropertyEditorCaretUpdate();
     propertyEditorState.modal.show();
+}
+
+function formatPropertyEditorKeyLabel(key) {
+    if (key == null) return "root";
+    if (typeof key === "number") return `[${key}]`;
+    if (typeof key === "string") return JSON.stringify(key);
+    return String(key);
+}
+
+function getPropertyEditorKeyLabelText(key) {
+    if (key == null) return "Item";
+    if (typeof key === "number") return "Index";
+    return "Property";
+}
+
+function isPropertyEditorKeyEditable(loader) {
+    if (!loader || !loader.parentLoader) return false;
+    const parentValue = loader.parentLoader.getValue();
+    if (!parentValue || typeof parentValue !== "object" || Array.isArray(parentValue)) return false;
+    return typeof loader.parentKey === "string";
+}
+
+function setPropertyEditorKeyError(message) {
+    if (!propertyEditorState.keyErrorLabel) return;
+    if (message) {
+        propertyEditorState.keyErrorLabel.textContent = message;
+        propertyEditorState.keyErrorLabel.classList.remove("d-none");
+    }
+    else {
+        propertyEditorState.keyErrorLabel.textContent = "";
+        propertyEditorState.keyErrorLabel.classList.add("d-none");
+    }
+}
+
+function updatePropertyEditorKeyUI(kvRoot) {
+    if (!propertyEditorState.keyRow || !propertyEditorState.keyDisplay) return;
+    const loader = kvRoot ? kvRoot.loader : null;
+    const key = loader ? loader.parentKey : null;
+    const editable = g_editingEnabled && isPropertyEditorKeyEditable(loader);
+    const labelText = getPropertyEditorKeyLabelText(key);
+    if (propertyEditorState.keyLabel) {
+        propertyEditorState.keyLabel.textContent = labelText;
+    }
+    propertyEditorState.keyDisplay.textContent = formatPropertyEditorKeyLabel(key);
+    propertyEditorState.keyDisplay.classList.toggle("property-editor-key-clickable", editable);
+    propertyEditorState.keyDisplay.disabled = !editable;
+    if (propertyEditorState.keyEditor) {
+        propertyEditorState.keyEditor.classList.add("d-none");
+    }
+    propertyEditorState.keyDisplay.classList.remove("d-none");
+    setPropertyEditorKeyError("");
+}
+
+function showPropertyEditorKeyEditor() {
+    if (!propertyEditorState.keyEditor || !propertyEditorState.keyInput || !propertyEditorState.keyDisplay) return;
+    const kvRoot = propertyEditorState.currentKvRoot;
+    const loader = kvRoot ? kvRoot.loader : null;
+    if (!g_editingEnabled || !isPropertyEditorKeyEditable(loader)) return;
+    propertyEditorState.keyInput.value = loader.parentKey ?? "";
+    propertyEditorState.keyEditor.classList.remove("d-none");
+    propertyEditorState.keyDisplay.classList.add("d-none");
+    setPropertyEditorKeyError("");
+    propertyEditorState.keyInput.focus();
+    propertyEditorState.keyInput.select();
+}
+
+function hidePropertyEditorKeyEditor() {
+    if (propertyEditorState.keyEditor) {
+        propertyEditorState.keyEditor.classList.add("d-none");
+    }
+    if (propertyEditorState.keyDisplay) {
+        propertyEditorState.keyDisplay.classList.remove("d-none");
+    }
+    setPropertyEditorKeyError("");
+}
+
+function updateKvRootKeyLabel(kvRoot, key) {
+    if (!kvRoot) return;
+    const keyElement = kvRoot.querySelector(".json-key");
+    if (keyElement) {
+        keyElement.textContent = formatPropertyEditorKeyLabel(key);
+    }
+}
+
+function applyPropertyEditorKeyRename(options = {}) {
+    const kvRoot = propertyEditorState.currentKvRoot;
+    const loader = kvRoot ? kvRoot.loader : null;
+    if (!g_editingEnabled || !isPropertyEditorKeyEditable(loader)) {
+        return { success: true, changed: false };
+    }
+    if (!propertyEditorState.keyInput) {
+        return { success: true, changed: false };
+    }
+    const parentValue = loader.parentLoader.getValue();
+    if (!parentValue || typeof parentValue !== "object" || Array.isArray(parentValue)) {
+        return { success: false, changed: false, reason: "parent-not-object" };
+    }
+    const oldKey = loader.parentKey;
+    const newKey = propertyEditorState.keyInput.value;
+    if (newKey === oldKey) {
+        hidePropertyEditorKeyEditor();
+        return { success: true, changed: false };
+    }
+    if (Object.prototype.hasOwnProperty.call(parentValue, newKey)) {
+        setPropertyEditorKeyError("That property name already exists in this object.");
+        if (!options.silent) {
+            propertyEditorState.keyInput.focus();
+            propertyEditorState.keyInput.select();
+        }
+        return { success: false, changed: false, reason: "duplicate" };
+    }
+    const oldIdentifier = getBulkSelectionIdentifier(loader);
+    const keys = Object.keys(parentValue);
+    const nextValue = {};
+    keys.forEach((key) => {
+        if (key === oldKey) {
+            nextValue[newKey] = parentValue[key];
+        }
+        else {
+            nextValue[key] = parentValue[key];
+        }
+    });
+    loader.parentLoader.value = nextValue;
+    loader.parentKey = newKey;
+    updateKvRootKeyLabel(kvRoot, newKey);
+    updatePropertyEditorPath(loader);
+    updatePropertyEditorKeyUI(kvRoot);
+    if (oldIdentifier && bulkSelectionState.has(oldIdentifier)) {
+        const newIdentifier = getBulkSelectionIdentifier(loader);
+        const value = bulkSelectionState.get(oldIdentifier);
+        bulkSelectionState.delete(oldIdentifier);
+        if (newIdentifier) {
+            bulkSelectionState.set(newIdentifier, loader.parentKey);
+        }
+    }
+    handleValueChanged(loader.parentLoader);
+    hidePropertyEditorKeyEditor();
+    return { success: true, changed: true };
 }
 
 function refreshRenderedString(kvRoot, newValue) {
