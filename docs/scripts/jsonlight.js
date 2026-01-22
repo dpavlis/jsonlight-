@@ -1255,6 +1255,8 @@ let searchRefreshHandle = null;
 let replaceInput = document.querySelector("#replace-input");
 let replaceAllButton = document.querySelector("#replace-all");
 let replaceButton = document.querySelector("#replace-current");
+let searchCollapseToggle = document.querySelector("#search-collapse-toggle");
+let searchCollapse = document.querySelector("#search-collapse");
 const topLevelPaginationState = {
     enabled: false,
     pageSize: getConfiguredPageSize(),
@@ -1284,6 +1286,7 @@ let replaceHistoryValues = [];
 let searchHistoryCommitHandle = null;
 
 initializeSearchAndReplaceHistory();
+initializeSearchCollapseToggle();
 
 if (topLevelGoButton) {
     topLevelGoButton.addEventListener("click", () => {
@@ -1749,6 +1752,22 @@ function initializeSearchAndReplaceHistory() {
         .filter((value) => typeof value === "string");
     refreshSearchHistoryDatalist();
     refreshReplaceHistoryDatalist();
+}
+
+function initializeSearchCollapseToggle() {
+    if (!searchCollapseToggle || !searchCollapse) return;
+    const updateToggle = () => {
+        const isExpanded = searchCollapse.classList.contains("show");
+        searchCollapseToggle.textContent = isExpanded ? "−" : "+";
+        searchCollapseToggle.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+    };
+    updateToggle();
+    searchCollapse.addEventListener("show.bs.collapse", () => {
+        searchCollapseToggle.textContent = "−";
+        searchCollapseToggle.setAttribute("aria-expanded", "true");
+    });
+    searchCollapse.addEventListener("shown.bs.collapse", updateToggle);
+    searchCollapse.addEventListener("hidden.bs.collapse", updateToggle);
 }
 
 function getLocalStorageSafe() {
