@@ -1691,11 +1691,7 @@ async function refreshChildListForLoader(loader, options = {}) {
 function updateTopLevelNavigator() {
     let mode = "none";
     let count = 0;
-    if (g_jsonlLoader) {
-        mode = "jsonl";
-        count = g_jsonlLoader.getTotalLines();
-    }
-    else if (g_currentRootLoader) {
+    if (g_currentRootLoader) {
         const rootValue = g_currentRootLoader.getValue();
         if (Array.isArray(rootValue)) {
             mode = "json-array";
@@ -1715,19 +1711,15 @@ function updateTopLevelNavigator() {
     if (topLevelCountLabel) {
         topLevelCountLabel.textContent = `${count}`;
     }
-    const canJump = (mode === "json-array" || mode === "jsonl") && count > 0;
+    const canJump = mode === "json-array" && count > 0;
     if (topLevelInput) {
         topLevelInput.disabled = !canJump;
-        topLevelInput.placeholder = mode === "jsonl"
-            ? "Line number (1-based)"
-            : (mode === "json-array" ? "Index (0-based)" : "Jump works with arrays or JSONL");
+        topLevelInput.placeholder = mode === "json-array"
+            ? "Index (0-based)"
+            : "Jump works with arrays";
         if (mode === "json-array") {
             topLevelInput.min = 0;
             topLevelInput.max = count > 0 ? count - 1 : 0;
-        }
-        else if (mode === "jsonl") {
-            topLevelInput.min = 1;
-            topLevelInput.max = count;
         }
         else {
             topLevelInput.min = 0;
@@ -1751,7 +1743,7 @@ async function handleTopLevelJump() {
         setTopLevelError("No items to jump to.");
         return;
     }
-    if (topLevelState.mode === "jsonl" || topLevelState.mode === "json-array") {
+    if (topLevelState.mode === "json-array") {
         const rawValue = (topLevelInput.value ?? "").trim();
         if (!rawValue) {
             setTopLevelError("Enter a number to jump.");
@@ -1762,15 +1754,6 @@ async function handleTopLevelJump() {
             setTopLevelError("Enter a valid number.");
             return;
         }
-        if (topLevelState.mode === "jsonl") {
-            if (parsed < 1 || parsed > topLevelState.count) {
-                setTopLevelError(`Enter a value between 1 and ${topLevelState.count}.`);
-                return;
-            }
-            setTopLevelError("");
-            navigateToLine(parsed);
-            return;
-        }
         if (parsed < 0 || parsed >= topLevelState.count) {
             setTopLevelError(`Enter a value between 0 and ${topLevelState.count - 1}.`);
             return;
@@ -1779,7 +1762,7 @@ async function handleTopLevelJump() {
         await jumpToArrayIndex(parsed);
         return;
     }
-    setTopLevelError("Jump works with arrays or JSONL.");
+    setTopLevelError("Jump works with arrays.");
 }
 
 async function jumpToArrayIndex(index) {
@@ -3174,7 +3157,7 @@ function isPropertyEditorKeyEditable(loader) {
 }
 
 function getAppendTargetMode() {
-    if (g_jsonlLoader && g_currentMode === "jsonl-line") {
+    if (g_jsonlLoader) {
         return "jsonl";
     }
     if (g_currentRootLoader) {
@@ -3323,15 +3306,23 @@ function scheduleAppendDataParse(hintMode = null) {
             statusWarning = true;
         }
         if (targetMode && result.items.length > 0) {
-            if (targetMode === "jsonl" && g_jsonlLoader && g_jsonlLoader.lines.length > 0) {
+            if (targetMode === "jsonl" && g_jsonlLoader && g_currentRootLoader) {
                 try {
-                    const existingSample = JSON.parse(g_jsonlLoader.lines[0]);
-                    const incomingSample = result.items[0];
-                    const message = getTopLevelCompatibilityMessage(existingSample, incomingSample);
-                    if (message) {
-                        statusMessage = message;
+                    const rootValue = g_currentRootLoader.getValue();
+                    if (!Array.isArray(rootValue)) {
+                        statusMessage = "JSONL data must be an array of objects.";
                         statusWarning = true;
                         disableApply = true;
+                    }
+                    else if (rootValue.length > 0) {
+                        const existingSample = rootValue[0];
+                        const incomingSample = result.items[0];
+                        const message = getTopLevelCompatibilityMessage(existingSample, incomingSample);
+                        if (message) {
+                            statusMessage = message;
+                            statusWarning = true;
+                            disableApply = true;
+                        }
                     }
                 }
                 catch (error) {
@@ -3455,40 +3446,34 @@ async function applyAppendData() {
         return;
     }
     if (targetMode === "jsonl" && g_jsonlLoader) {
-        if (g_jsonlLoader.lines.length > 0) {
-            try {
-                const existingSample = JSON.parse(g_jsonlLoader.lines[0]);
-                const incomingSample = appendDataState.parsedItems[0];
-                if (!isCompatibleTopLevel(existingSample, incomingSample)) {
-                    setAppendDataError("");
-                    setAppendDataStatus("Incompatible top-level structure for JSONL append.", true);
-                    setAppendDataApplyState(true, "Incompatible top-level structure for JSONL append.");
-                    return;
-                }
-            }
-            catch (error) {
+        if (!g_currentRootLoader) {
+            setAppendDataError("");
+            setAppendDataStatus("Unable to append to JSONL data.", true);
+            setAppendDataApplyState(true, "Unable to append to JSONL data.");
+            return;
+        }
+        const rootValue = g_currentRootLoader.getValue();
+        if (!Array.isArray(rootValue)) {
+            setAppendDataError("");
+            setAppendDataStatus("JSONL data must be an array of objects.", true);
+            setAppendDataApplyState(true, "JSONL data must be an array of objects.");
+            return;
+        }
+        if (rootValue.length > 0) {
+            const existingSample = rootValue[0];
+            const incomingSample = appendDataState.parsedItems[0];
+            if (!isCompatibleTopLevel(existingSample, incomingSample)) {
                 setAppendDataError("");
-                setAppendDataStatus("Unable to validate JSONL structure before append.", true);
-                setAppendDataApplyState(true, "Unable to validate JSONL structure before append.");
+                setAppendDataStatus("Incompatible top-level structure for JSONL append.", true);
+                setAppendDataApplyState(true, "Incompatible top-level structure for JSONL append.");
                 return;
             }
         }
-        const linesToAdd = appendDataState.parsedItems.map(item => {
-            try {
-                return JSON.stringify(item);
-            }
-            catch (error) {
-                return null;
-            }
-        }).filter(line => line != null);
-        if (!linesToAdd.length) {
-            setAppendDataError("Unable to serialize items for JSONL append.");
-            return;
-        }
-        g_jsonlLoader.lines.push(...linesToAdd);
-        updateJsonlControls();
-        updateTopLevelNavigator();
-        updateDownloadButtons();
+        const expandedPaths = captureExpandedPaths();
+        rootValue.push(...appendDataState.parsedItems);
+        handleValueChanged(g_currentRootLoader);
+        rerenderCurrentRoot({ preserveScroll: true });
+        restoreExpandedPaths(expandedPaths);
         if (appendDataState.modal) appendDataState.modal.hide();
         return;
     }
@@ -3767,8 +3752,8 @@ function getRootLoader(loader) {
 function handleValueChanged(loader, options = {}) {
     let rootLoader = getRootLoader(loader);
     if (!rootLoader || rootLoader !== g_currentRootLoader) return;
-    if (g_currentMode === "jsonl-line" && g_jsonlLoader) {
-        g_jsonlLoader.updateCurrentLineText(rootLoader.getValue());
+    if (g_jsonlLoader && g_currentRootLoader === g_jsonlLoader) {
+        g_jsonlLoader.syncLinesFromValue(rootLoader.getValue());
     }
     updateDownloadButtons();
     updateTopLevelNavigator();
@@ -4012,7 +3997,23 @@ class JsonlDataLoader extends DataLoader {
                     type: 'JSONL File Error'
                 };
             }
-            return this.loadLine(0);
+            const parsed = [];
+            for (let index = 0; index < this.lines.length; index += 1) {
+                const line = this.lines[index];
+                try {
+                    parsed.push(JSON.parse(line));
+                }
+                catch (exception) {
+                    return {
+                        success: false,
+                        error: `Line ${index + 1}: ${exception.message}`,
+                        type: 'JSONL Parse Error'
+                    };
+                }
+            }
+            this.value = parsed;
+            this.currentLine = 0;
+            return { success: true };
         }
         catch (exception) {
             return { 
@@ -4023,35 +4024,28 @@ class JsonlDataLoader extends DataLoader {
         }
     }
 
-    loadLine(lineIndex) {
-        if (lineIndex < 0 || lineIndex >= this.lines.length) {
-            return { 
-                success: false, 
-                error: `Line ${lineIndex + 1} is out of range (1-${this.lines.length})`,
-                type: 'Line Index Error'
-            };
-        }
-        
-        try {
-            this.currentLine = lineIndex;
-            this.value = JSON.parse(this.lines[lineIndex]);
-            return { success: true };
-        }
-        catch (exception) {
-            return { 
-                success: false, 
-                error: `Line ${lineIndex + 1}: ${exception.message}`,
-                type: 'JSON Parse Error'
-            };
-        }
-    }
-
     getTotalLines() {
         return this.lines.length;
     }
 
     getCurrentLine() {
         return this.currentLine;
+    }
+
+    syncLinesFromValue(value) {
+        const source = typeof value === "undefined" ? this.value : value;
+        if (source == null) {
+            this.lines = [];
+            this.currentLine = 0;
+            return;
+        }
+        if (Array.isArray(source)) {
+            this.lines = source.map((item) => JSON.stringify(cloneJsonValue(item)));
+        }
+        else {
+            this.lines = [JSON.stringify(cloneJsonValue(source))];
+        }
+        this.currentLine = 0;
     }
 
     getChild() {
@@ -4747,7 +4741,9 @@ function getJsonText() {
 }
 
 function getJsonlText() {
-    if (!g_jsonlLoader || !g_jsonlLoader.lines || g_jsonlLoader.lines.length === 0) return null;
+    if (!g_jsonlLoader) return null;
+    g_jsonlLoader.syncLinesFromValue(g_currentRootLoader ? g_currentRootLoader.getValue() : undefined);
+    if (!g_jsonlLoader.lines || g_jsonlLoader.lines.length === 0) return null;
     return g_jsonlLoader.lines.join("\n");
 }
 
@@ -5042,14 +5038,13 @@ async function renderJsonlFile(file) {
         return;
     }
     g_jsonlLoader = loader;
-    updateTopLevelNavigator();
+    setCurrentRootLoader(loader, "jsonl");
     refreshSearchPropertyOptionsFromCurrentData();
-    
-    // Show JSONL controls
-    showJsonlControls();
-    updateJsonlControls();
-    renderCurrentJsonlLine();
-    updateDownloadButtons();
+    const jsonlControls = document.querySelector("#jsonl-controls");
+    if (jsonlControls) {
+        jsonlControls.style.display = "none";
+    }
+    renderJSON(loader);
 }
 
 function showJsonlControls() {
@@ -5091,33 +5086,14 @@ function renderCurrentJsonlLine() {
 }
 
 function navigateToLine(lineNumber) {
-    if (!g_jsonlLoader) return;
-    
-    const lineIndex = lineNumber - 1; // Convert to 0-indexed
-    let result = g_jsonlLoader.loadLine(lineIndex);
-    if (result.success) {
-        updateJsonlControls();
-        renderCurrentJsonlLine();
-    } else {
-        // Display error in a temporary alert
-        let errorAlert = document.createElement("div");
-        errorAlert.classList.add("alert", "alert-warning", "alert-dismissible", "fade", "show", "m-2");
-        errorAlert.innerHTML = `
-            <strong>Navigation Error:</strong> ${result.error}
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        `;
-        document.querySelector("#view").insertBefore(errorAlert, document.querySelector("#view").firstChild);
-        
-        // Auto-dismiss after 3 seconds
-        setTimeout(() => {
-            if (errorAlert.parentNode) {
-                errorAlert.parentNode.removeChild(errorAlert);
-            }
-        }, 3000);
-        
-        // Reset input to current line
-        updateJsonlControls();
+    if (!g_currentRootLoader) return;
+    const rootValue = g_currentRootLoader.getValue();
+    if (!Array.isArray(rootValue)) return;
+    const lineIndex = lineNumber - 1;
+    if (lineIndex < 0 || lineIndex >= rootValue.length) {
+        return;
     }
+    void jumpToArrayIndex(lineIndex);
 }
 
 let pasteArea = document.querySelector("#paste");
