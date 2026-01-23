@@ -1715,8 +1715,8 @@ function updateTopLevelNavigator() {
     if (topLevelInput) {
         topLevelInput.disabled = !canJump;
         topLevelInput.placeholder = mode === "json-array"
-            ? "Index (0-based)"
-            : "Jump works with arrays";
+            ? "ID (0-based)"
+            : "Array only";
         if (mode === "json-array") {
             topLevelInput.min = 0;
             topLevelInput.max = count > 0 ? count - 1 : 0;
@@ -1762,7 +1762,7 @@ async function handleTopLevelJump() {
         await jumpToArrayIndex(parsed);
         return;
     }
-    setTopLevelError("Jump works with arrays.");
+    setTopLevelError("Array only.");
 }
 
 async function jumpToArrayIndex(index) {
@@ -1891,7 +1891,8 @@ function updateSearchPropertySummary() {
     }
     const summary = searchPropertyFilterState.rules.map((rule) => {
         if (!rule.conditionKey) return rule.property;
-        return `${rule.property} where ${rule.conditionKey} = ${rule.conditionValue}`;
+        const modeLabel = rule.conditionMatchMode === "contains" ? "contains" : "=";
+        return `${rule.property} where ${rule.conditionKey} ${modeLabel} ${rule.conditionValue}`;
     }).join("; ");
     searchPropertySummary.textContent = summary || "All";
 }
@@ -1902,19 +1903,30 @@ function addSearchPropertyRuleRow(rule = {}) {
     row.classList.add("search-property-rule");
     const propertyInput = document.createElement("input");
     propertyInput.type = "text";
-    propertyInput.classList.add("form-control", "form-control-sm");
+    propertyInput.classList.add("form-control", "form-control-sm", "search-property-rule-property");
     propertyInput.placeholder = "Property";
     propertyInput.value = rule.property || "";
     propertyInput.setAttribute("list", "search-property-suggestions");
     const conditionKeyInput = document.createElement("input");
     conditionKeyInput.type = "text";
-    conditionKeyInput.classList.add("form-control", "form-control-sm");
+    conditionKeyInput.classList.add("form-control", "form-control-sm", "search-property-rule-condition-key");
     conditionKeyInput.placeholder = "Condition property";
     conditionKeyInput.value = rule.conditionKey || "";
     conditionKeyInput.setAttribute("list", "search-property-suggestions");
+    const conditionModeSelect = document.createElement("select");
+    conditionModeSelect.classList.add("form-select", "form-select-sm", "search-property-rule-condition-mode");
+    const exactOption = document.createElement("option");
+    exactOption.value = "exact";
+    exactOption.textContent = "=";
+    const containsOption = document.createElement("option");
+    containsOption.value = "contains";
+    containsOption.textContent = "contains";
+    conditionModeSelect.appendChild(exactOption);
+    conditionModeSelect.appendChild(containsOption);
+    conditionModeSelect.value = rule.conditionMatchMode === "contains" ? "contains" : "exact";
     const conditionValueInput = document.createElement("input");
     conditionValueInput.type = "text";
-    conditionValueInput.classList.add("form-control", "form-control-sm");
+    conditionValueInput.classList.add("form-control", "form-control-sm", "search-property-rule-condition-value");
     conditionValueInput.placeholder = "Condition value";
     conditionValueInput.value = rule.conditionValue || "";
     const removeButton = document.createElement("button");
@@ -1927,6 +1939,7 @@ function addSearchPropertyRuleRow(rule = {}) {
     });
     row.appendChild(propertyInput);
     row.appendChild(conditionKeyInput);
+    row.appendChild(conditionModeSelect);
     row.appendChild(conditionValueInput);
     row.appendChild(removeButton);
     searchPropertyRulesContainer.appendChild(row);
@@ -1946,11 +1959,17 @@ function readSearchPropertyRulesFromUI() {
     if (!searchPropertyRulesContainer) return [];
     const rows = Array.from(searchPropertyRulesContainer.querySelectorAll(".search-property-rule"));
     return rows.map((row) => {
-        const inputs = row.querySelectorAll("input");
+        const propertyInput = row.querySelector(".search-property-rule-property");
+        const conditionKeyInput = row.querySelector(".search-property-rule-condition-key");
+        const conditionValueInput = row.querySelector(".search-property-rule-condition-value");
+        const conditionModeSelect = row.querySelector(".search-property-rule-condition-mode");
         return {
-            property: normalizePropertyName(inputs[0]?.value || ""),
-            conditionKey: normalizePropertyName(inputs[1]?.value || ""),
-            conditionValue: normalizePropertyName(inputs[2]?.value || "")
+            property: normalizePropertyName(propertyInput?.value || ""),
+            conditionKey: normalizePropertyName(conditionKeyInput?.value || ""),
+            conditionValue: normalizePropertyName(conditionValueInput?.value || ""),
+            conditionMatchMode: conditionModeSelect && conditionModeSelect.value === "contains"
+                ? "contains"
+                : "exact"
         };
     }).filter((rule) => rule.property);
 }
@@ -2328,7 +2347,12 @@ function isSearchPropertyMatch(key, parentObject, rules) {
         if (!parentObject || typeof parentObject !== "object") return false;
         const candidate = parentObject[rule.conditionKey];
         if (candidate === undefined) return false;
-        return String(candidate) === String(rule.conditionValue ?? "");
+        const candidateText = String(candidate);
+        const expectedText = String(rule.conditionValue ?? "");
+        if (rule.conditionMatchMode === "contains") {
+            return candidateText.includes(expectedText);
+        }
+        return candidateText === expectedText;
     });
 }
 

@@ -138,7 +138,7 @@
           <div class="text-center text-muted small" id="top-level-page-range">Items 1–1</div>
         </div>
         <div class="input-group input-group-sm">
-          <input type="number" class="form-control" id="top-level-index-input" min="1" step="1" placeholder="Index or line #">
+          <input type="number" class="form-control" id="top-level-index-input" min="1" step="1" placeholder="ID (0-based)">
           <button class="btn btn-outline-secondary" type="button" id="top-level-go" title="Jump to the specified item">Go</button>
         </div>
         <div class="text-danger small" id="top-level-error"></div>
@@ -166,7 +166,7 @@
               type="button"
               class="btn btn-link btn-sm p-0 search-property-summary"
               id="search-property-summary"
-              title="Choose which properties to search"
+              title="Choose which properties to search/replace"
             >
               All
             </button>
@@ -485,7 +485,7 @@
             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close" title="Close"></button>
           </div>
           <div class="modal-body">
-            <div class="text-muted small mb-2">Leave empty to search all properties. Add a condition to limit matches to objects where another property has a specific value.</div>
+            <div class="text-muted small mb-2">Leave empty to search all properties. Add a condition to limit matches to objects where another property equals or contains a value.</div>
             <div class="search-property-rules" id="search-property-rules"></div>
             <button type="button" class="btn btn-outline-secondary btn-sm mt-2" id="search-property-add">Add filter</button>
             <div class="text-danger small mt-2" id="search-property-error" role="alert" aria-live="polite"></div>
