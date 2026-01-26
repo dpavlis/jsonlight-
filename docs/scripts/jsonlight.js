@@ -84,6 +84,7 @@ const appendDataState = {
     openButton: document.querySelector("#append-data-button"),
     fileInput: document.querySelector("#append-data-file"),
     textArea: document.querySelector("#append-data-text"),
+    replaceToggle: document.querySelector("#append-data-replace"),
     formatLabel: document.querySelector("#append-data-format"),
     countLabel: document.querySelector("#append-data-count"),
     errorLabel: document.querySelector("#append-data-error"),
@@ -852,8 +853,10 @@ if (appendDataState.modalElement) {
         if (appendDataState.textArea) {
             appendDataState.textArea.focus();
         }
+        updateAppendDataActionLabel();
+        updateAppendDataSummary(appendDataState.parsedItems ? appendDataState.parsedItems.length : 0, appendDataState.parsedMode);
         const targetMode = getAppendTargetMode();
-        if (!targetMode) {
+        if (!isAppendReplaceMode() && !targetMode) {
             setAppendDataError("");
             setAppendDataStatus("Append works with JSON arrays or JSONL data.", true);
         }
@@ -3210,7 +3213,8 @@ function updateAppendDataSummary(count, mode) {
         appendDataState.formatLabel.textContent = mode ? `Format: ${mode.toUpperCase()}` : "Format: —";
     }
     if (appendDataState.countLabel) {
-        appendDataState.countLabel.textContent = `Will add: ${count || 0}`;
+        const prefix = isAppendReplaceMode() ? "Will replace:" : "Will add:";
+        appendDataState.countLabel.textContent = `${prefix} ${count || 0}`;
     }
 }
 
@@ -3223,7 +3227,19 @@ function setAppendDataStatus(message, isWarning = false) {
 function setAppendDataApplyState(disabled, reason = "") {
     if (!appendDataState.applyButton) return;
     appendDataState.applyButton.disabled = !!disabled;
-    appendDataState.applyButton.title = disabled && reason ? reason : "Append";
+    const actionLabel = isAppendReplaceMode() ? "Replace" : "Append";
+    appendDataState.applyButton.title = disabled && reason ? reason : actionLabel;
+}
+
+function isAppendReplaceMode() {
+    return !!(appendDataState.replaceToggle && appendDataState.replaceToggle.checked);
+}
+
+function updateAppendDataActionLabel() {
+    const actionLabel = isAppendReplaceMode() ? "Replace" : "Append";
+    if (appendDataState.applyButton) {
+        appendDataState.applyButton.textContent = actionLabel;
+    }
 }
 
 function parseJsonTextWithContext(text) {
@@ -3321,7 +3337,8 @@ function scheduleAppendDataParse(hintMode = null) {
         appendDataState.parsedValue = result.value;
         updateAppendDataSummary(result.items.length, result.mode);
         setAppendDataError("");
-        const targetMode = getAppendTargetMode();
+        const shouldReplace = isAppendReplaceMode();
+        const targetMode = shouldReplace ? "replace" : getAppendTargetMode();
         let disableApply = !targetMode || result.items.length === 0;
         let statusMessage = "";
         let statusWarning = false;
@@ -3329,7 +3346,7 @@ function scheduleAppendDataParse(hintMode = null) {
             statusMessage = "Append works with JSON arrays or JSONL data.";
             statusWarning = true;
         }
-        if (targetMode && result.items.length > 0) {
+        if (targetMode && result.items.length > 0 && !shouldReplace) {
             if (targetMode === "jsonl" && g_jsonlLoader && g_currentRootLoader) {
                 try {
                     const rootValue = g_currentRootLoader.getValue();
@@ -3382,16 +3399,16 @@ function scheduleAppendDataParse(hintMode = null) {
             }
         }
         if (!statusMessage && disableApply && result.items.length === 0) {
-            statusMessage = "No items to append.";
+            statusMessage = shouldReplace ? "No items to replace." : "No items to append.";
             statusWarning = true;
         }
         setAppendDataStatus(statusMessage, statusWarning);
         if (disableApply) {
-            const tooltip = statusMessage || "Append is unavailable.";
+            const tooltip = statusMessage || (shouldReplace ? "Replace is unavailable." : "Append is unavailable.");
             setAppendDataApplyState(true, tooltip);
         }
         else {
-            setAppendDataApplyState(false, "Append");
+            setAppendDataApplyState(false, shouldReplace ? "Replace" : "Append");
         }
     }, APPEND_DATA_PARSE_DEBOUNCE_MS);
 }
@@ -3402,10 +3419,12 @@ function resetAppendDataDialog() {
     appendDataState.parsedValue = null;
     if (appendDataState.fileInput) appendDataState.fileInput.value = "";
     if (appendDataState.textArea) appendDataState.textArea.value = "";
+    if (appendDataState.replaceToggle) appendDataState.replaceToggle.checked = false;
     updateAppendDataSummary(0, null);
+    updateAppendDataActionLabel();
     setAppendDataError("");
     setAppendDataStatus("");
-    setAppendDataApplyState(true, "Paste or choose data to append.");
+    setAppendDataApplyState(true, "Paste or choose data to append or replace.");
 }
 
 function formatKeyList(keys, limit = 6) {
@@ -3456,6 +3475,42 @@ function isCompatibleTopLevel(existingItem, newItem) {
 }
 
 async function applyAppendData() {
+    if (isAppendReplaceMode()) {
+        if (!appendDataState.parsedItems || appendDataState.parsedItems.length === 0) {
+            setAppendDataError("No parsed items to apply.");
+            setAppendDataStatus("");
+            setAppendDataApplyState(true, "No parsed items to apply.");
+            return;
+        }
+        const parsedMode = appendDataState.parsedMode;
+        if (parsedMode === "jsonl") {
+            const loader = new JsonlDataLoader();
+            loader.loadObject([...appendDataState.parsedItems]);
+            loader.syncLinesFromValue(loader.getValue());
+            g_jsonlLoader = loader;
+            setCurrentRootLoader(loader, "jsonl");
+            refreshSearchPropertyOptionsFromCurrentData();
+            renderJSON(loader);
+        }
+        else if (parsedMode === "json") {
+            const loader = newDataLoader();
+            const replacementValue = typeof appendDataState.parsedValue !== "undefined"
+                ? appendDataState.parsedValue
+                : (appendDataState.parsedItems.length === 1 ? appendDataState.parsedItems[0] : appendDataState.parsedItems);
+            loader.loadObject(replacementValue);
+            g_jsonlLoader = null;
+            setCurrentRootLoader(loader, "json");
+            refreshSearchPropertyOptionsFromCurrentData();
+            renderJSON(loader);
+        }
+        else {
+            setAppendDataError("Unable to apply the selected data.");
+            return;
+        }
+        updateDownloadButtons();
+        if (appendDataState.modal) appendDataState.modal.hide();
+        return;
+    }
     const targetMode = getAppendTargetMode();
     if (!targetMode) {
         setAppendDataError("");
@@ -4884,8 +4939,11 @@ function newDataLoader() {
 }
 
 function renderJSON(loader) {
+    const view = document.querySelector("#view");
+    if (!view) return;
+    view.replaceChildren();
     let rootJson = renderKV(null, loader);
-    document.querySelector("#view").appendChild(rootJson);
+    view.appendChild(rootJson);
     initializeTopLevelPagination(rootJson);
     let rootButton = rootJson.querySelector(".collapse-button");
     if (rootButton) {
@@ -5215,6 +5273,19 @@ if (appendDataState.fileInput) {
 if (appendDataState.textArea) {
     appendDataState.textArea.addEventListener("input", () => {
         scheduleAppendDataParse();
+    });
+}
+
+if (appendDataState.replaceToggle) {
+    appendDataState.replaceToggle.addEventListener("change", () => {
+        updateAppendDataActionLabel();
+        updateAppendDataSummary(
+            appendDataState.parsedItems ? appendDataState.parsedItems.length : 0,
+            appendDataState.parsedMode
+        );
+        if (appendDataState.textArea && appendDataState.textArea.value.trim()) {
+            scheduleAppendDataParse();
+        }
     });
 }
 

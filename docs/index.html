@@ -54,27 +54,12 @@
       </div>
       <div class="mb-3">
         <div class="d-flex align-items-center gap-2 mb-1">
-          <label for="filepicker" class="form-label mb-0 flex-grow-1">Open file / Paste here</label>
-          <button
-            class="btn btn-light btn-sm btn-icon toggle-button"
-            type="button"
-            id="paste-toggle-button"
-            data-bs-toggle="collapse"
-            data-bs-target="#paste-collapse"
-            aria-expanded="false"
-            aria-controls="paste-collapse"
-            title="Show or hide the paste area"
-          >
-            +
-          </button>
+          <label for="filepicker" class="form-label mb-0 flex-grow-1">Open file</label>
         </div>
         <input type="file" class="form-control form-control-sm" id="filepicker" name="filepicker" accept=".json, .geojson" title="Choose a file to load">
         <div class="d-flex gap-2 mt-2">
-          <button type="button" class="btn btn-outline-secondary btn-sm flex-fill" id="append-data-button" title="Append additional JSON/JSONL data">Append data</button>
+          <button type="button" class="btn btn-outline-secondary btn-sm flex-fill" id="append-data-button" title="Append or paste JSON/JSONL data">Append/Paste data</button>
           <button type="button" class="btn btn-outline-success btn-sm flex-fill" id="download-data" disabled title="Download the current data">Save JSON</button>
-        </div>
-        <div class="collapse mt-2" id="paste-collapse">
-          <textarea class="form-control form-control-sm" id="paste" rows="10"></textarea>
         </div>
       </div>
       <div id="jsonl-controls" class="mb-2" style="display: none;">
@@ -431,10 +416,14 @@
       <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content">
           <div class="modal-header">
-            <h5 class="modal-title" id="append-data-title">Append JSON/JSONL Data</h5>
+            <h5 class="modal-title" id="append-data-title">Append/Paste JSON/JSONL Data</h5>
             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close" title="Close"></button>
           </div>
           <div class="modal-body">
+            <div class="form-check form-switch mb-3">
+              <input class="form-check-input" type="checkbox" id="append-data-replace">
+              <label class="form-check-label" for="append-data-replace">Replace existing data</label>
+            </div>
             <div class="mb-3">
               <label class="form-label" for="append-data-file">Add from file</label>
               <input type="file" class="form-control form-control-sm" id="append-data-file" accept=".json,.jsonl,.geojson,.ndjson,.jsonlines,.txt">
