@@ -158,6 +158,14 @@ const APP_CONFIG_MIN_INDENT_SIZE = 1;
 const APP_CONFIG_MAX_INDENT_SIZE = 8;
 const APP_CONFIG_MIN_FONT_SIZE = 0.7;
 const APP_CONFIG_MAX_FONT_SIZE = 1.4;
+const PROPERTY_EDITOR_SYNTAX_LANGUAGES = {
+    none: { label: "Other / Plain text", hljs: "plaintext" },
+    javascript: { label: "JavaScript", hljs: "javascript" },
+    java: { label: "Java", hljs: "java" },
+    python: { label: "Python", hljs: "python" },
+    ctl: { label: "CTL", hljs: "ctl" }
+};
+
 const APP_CONFIG_DEFAULTS = {
     pageSize: 500,
     tabInsertion: PROPERTY_EDITOR_TAB_INSERTION,
@@ -191,14 +199,6 @@ const runtimeFormattingState = {
     editorFontSize: APP_CONFIG_DEFAULTS.editorFontSize
 };
 
-const PROPERTY_EDITOR_SYNTAX_LANGUAGES = {
-    none: { label: "Other / Plain text", hljs: "plaintext" },
-    javascript: { label: "JavaScript", hljs: "javascript" },
-    java: { label: "Java", hljs: "java" },
-    python: { label: "Python", hljs: "python" },
-    ctl: { label: "CTL", hljs: "ctl" }
-};
-
 function normalizeSyntaxLanguage(value) {
     if (typeof value !== "string") return "none";
     const key = value.toLowerCase();
@@ -214,6 +214,7 @@ function isSyntaxHighlightingEnabled() {
 }
 
 updateRuntimeFormattingSettings();
+applyPropertyEditorSyntaxSettings();
 
 if (typeof window !== "undefined" && window.hljs && typeof window.hljs.configure === "function") {
     window.hljs.configure({ ignoreUnescapedHTML: true });
@@ -1281,11 +1282,13 @@ async function handleAppConfigSave() {
 function loadAppConfigFromStorage() {
     const storage = getLocalStorageSafe();
     if (!storage) {
+        console.warn("localStorage not available - preferences will not persist");
         return { ...APP_CONFIG_DEFAULTS };
     }
     try {
         const raw = storage.getItem(APP_CONFIG_STORAGE_KEY);
         if (!raw) {
+            console.log("No saved preferences found - using defaults");
             return { ...APP_CONFIG_DEFAULTS };
         }
         const parsed = JSON.parse(raw);
@@ -1298,6 +1301,7 @@ function loadAppConfigFromStorage() {
             syntaxHighlighting: !!parsed.syntaxHighlighting,
             syntaxLanguage: normalizeSyntaxLanguage(parsed.syntaxLanguage)
         };
+        console.log("Loaded preferences from storage:", nextConfig);
         return nextConfig;
     }
     catch (error) {
@@ -1308,9 +1312,19 @@ function loadAppConfigFromStorage() {
 
 function persistAppConfigToStorage(config) {
     const storage = getLocalStorageSafe();
-    if (!storage) return;
+    if (!storage) {
+        console.warn("localStorage not available - cannot save preferences");
+        return;
+    }
     try {
-        storage.setItem(APP_CONFIG_STORAGE_KEY, JSON.stringify(config));
+        const serialized = JSON.stringify(config);
+        storage.setItem(APP_CONFIG_STORAGE_KEY, serialized);
+        console.log("Saved preferences to storage:", config);
+        // Verify it was actually saved
+        const verify = storage.getItem(APP_CONFIG_STORAGE_KEY);
+        if (verify !== serialized) {
+            console.error("localStorage save verification failed!");
+        }
     }
     catch (error) {
         console.warn("Unable to save preferences", error);
@@ -2197,7 +2211,14 @@ function refreshSearchPropertyOptionsFromCurrentData() {
 function getLocalStorageSafe() {
     if (typeof window === "undefined") return null;
     try {
-        return window.localStorage || null;
+        const storage = window.localStorage;
+        if (storage) {
+            // Test if we can actually write to it
+            const testKey = "__jsonlight_test__";
+            storage.setItem(testKey, "test");
+            storage.removeItem(testKey);
+        }
+        return storage || null;
     }
     catch (error) {
         console.warn("Local storage unavailable", error);
