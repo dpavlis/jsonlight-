@@ -2852,11 +2852,24 @@ function highlightMatchInKv(kvRoot, match) {
         targetElement = kvRoot.querySelector(".json-key");
     }
     else {
-        targetElement = kvRoot.querySelector(".json-value");
+        const rawString = kvRoot.querySelector(".raw-string");
+        if (rawString && isElementVisible(rawString)) {
+            targetElement = rawString;
+        }
+        else {
+            targetElement = kvRoot.querySelector(".json-value");
+        }
     }
     if (targetElement) {
         applyTextHighlight(targetElement, match);
     }
+}
+
+function isElementVisible(element) {
+    if (!element) return false;
+    const style = getComputedStyle(element);
+    if (style.display === "none" || style.visibility === "hidden") return false;
+    return !!(element.offsetParent || style.position === "fixed");
 }
 
 function moveSearch(direction) {
