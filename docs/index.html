@@ -455,9 +455,15 @@
             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close" title="Close"></button>
           </div>
           <div class="modal-body">
-            <div class="form-check form-switch mb-3">
-              <input class="form-check-input" type="checkbox" id="append-data-replace">
-              <label class="form-check-label" for="append-data-replace">Replace existing data</label>
+            <div class="d-flex flex-wrap align-items-center gap-3 mb-3">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="append-data-replace">
+                <label class="form-check-label" for="append-data-replace">Replace existing data</label>
+              </div>
+              <div class="form-check form-switch append-data-force">
+                <input class="form-check-input" type="checkbox" id="append-data-force">
+                <label class="form-check-label" for="append-data-force">Force append</label>
+              </div>
             </div>
             <div class="mb-3">
               <label class="form-label" for="append-data-file">Add from file</label>

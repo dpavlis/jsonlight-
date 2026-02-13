@@ -34,9 +34,9 @@ const PROPERTY_EDITOR_TAB_INSERTION = "\t";
 const PROPERTY_EDITOR_INDENT_STEP = "  ";
 
 // Debounce durations for the paste/edit textarea auto-refresh behavior.
-const PASTE_AREA_EDIT_DEBOUNCE_MS = 600;
+const PASTE_AREA_EDIT_DEBOUNCE_MS = 800;
 const PASTE_AREA_PASTE_DELAY_MS = 30;
-const APPEND_DATA_PARSE_DEBOUNCE_MS = 400;
+const APPEND_DATA_PARSE_DEBOUNCE_MS = 800;
 
 
 
@@ -93,6 +93,7 @@ const appendDataState = {
     fileInput: document.querySelector("#append-data-file"),
     textArea: document.querySelector("#append-data-text"),
     replaceToggle: document.querySelector("#append-data-replace"),
+    forceToggle: document.querySelector("#append-data-force"),
     formatLabel: document.querySelector("#append-data-format"),
     countLabel: document.querySelector("#append-data-count"),
     errorLabel: document.querySelector("#append-data-error"),
@@ -3469,6 +3470,10 @@ function isAppendReplaceMode() {
     return !!(appendDataState.replaceToggle && appendDataState.replaceToggle.checked);
 }
 
+function isAppendForceMode() {
+    return !!(appendDataState.forceToggle && appendDataState.forceToggle.checked);
+}
+
 function updateAppendDataActionLabel() {
     const actionLabel = isAppendReplaceMode() ? "Replace" : "Append";
     if (appendDataState.applyButton) {
@@ -3572,6 +3577,7 @@ function scheduleAppendDataParse(hintMode = null) {
         updateAppendDataSummary(result.items.length, result.mode);
         setAppendDataError("");
         const shouldReplace = isAppendReplaceMode();
+        const forceAppend = isAppendForceMode();
         const targetMode = shouldReplace ? "replace" : getAppendTargetMode();
         let disableApply = !targetMode || result.items.length === 0;
         let statusMessage = "";
@@ -3594,9 +3600,9 @@ function scheduleAppendDataParse(hintMode = null) {
                         const incomingSample = result.items[0];
                         const message = getTopLevelCompatibilityMessage(existingSample, incomingSample);
                         if (message) {
-                            statusMessage = message;
+                            statusMessage = forceAppend ? `Force append enabled. ${message}` : message;
                             statusWarning = true;
-                            disableApply = true;
+                            if (!forceAppend) disableApply = true;
                         }
                     }
                 }
@@ -3619,9 +3625,9 @@ function scheduleAppendDataParse(hintMode = null) {
                         const incomingSample = result.items[0];
                         const message = getTopLevelCompatibilityMessage(existingSample, incomingSample);
                         if (message) {
-                            statusMessage = message;
+                            statusMessage = forceAppend ? `Force append enabled. ${message}` : message;
                             statusWarning = true;
-                            disableApply = true;
+                            if (!forceAppend) disableApply = true;
                         }
                     }
                 }
@@ -3654,6 +3660,9 @@ function resetAppendDataDialog() {
     if (appendDataState.fileInput) appendDataState.fileInput.value = "";
     if (appendDataState.textArea) appendDataState.textArea.value = "";
     if (appendDataState.replaceToggle) appendDataState.replaceToggle.checked = false;
+    if (appendDataState.forceToggle) appendDataState.forceToggle.checked = false;
+    if (appendDataState.replaceToggle) appendDataState.replaceToggle.disabled = false;
+    if (appendDataState.forceToggle) appendDataState.forceToggle.disabled = false;
     updateAppendDataSummary(0, null);
     updateAppendDataActionLabel();
     setAppendDataError("");
@@ -3758,6 +3767,7 @@ async function applyAppendData() {
         setAppendDataApplyState(true, "No parsed items to append.");
         return;
     }
+    const forceAppend = isAppendForceMode();
     if (targetMode === "jsonl" && g_jsonlLoader) {
         if (!g_currentRootLoader) {
             setAppendDataError("");
@@ -3772,7 +3782,7 @@ async function applyAppendData() {
             setAppendDataApplyState(true, "JSONL data must be an array of objects.");
             return;
         }
-        if (rootValue.length > 0) {
+        if (rootValue.length > 0 && !forceAppend) {
             const existingSample = rootValue[0];
             const incomingSample = appendDataState.parsedItems[0];
             if (!isCompatibleTopLevel(existingSample, incomingSample)) {
@@ -3798,7 +3808,7 @@ async function applyAppendData() {
             setAppendDataApplyState(true, "Current data is not an array.");
             return;
         }
-        if (rootValue.length > 0) {
+        if (rootValue.length > 0 && !forceAppend) {
             const existingSample = rootValue[0];
             const incomingSample = appendDataState.parsedItems[0];
             if (!isCompatibleTopLevel(existingSample, incomingSample)) {
@@ -5693,11 +5703,37 @@ if (appendDataState.textArea) {
 
 if (appendDataState.replaceToggle) {
     appendDataState.replaceToggle.addEventListener("change", () => {
+        if (appendDataState.forceToggle) {
+            if (appendDataState.replaceToggle.checked) {
+                appendDataState.forceToggle.checked = false;
+                appendDataState.forceToggle.disabled = true;
+            }
+            else {
+                appendDataState.forceToggle.disabled = false;
+            }
+        }
         updateAppendDataActionLabel();
         updateAppendDataSummary(
             appendDataState.parsedItems ? appendDataState.parsedItems.length : 0,
             appendDataState.parsedMode
         );
+        if (appendDataState.textArea && appendDataState.textArea.value.trim()) {
+            scheduleAppendDataParse();
+        }
+    });
+}
+
+if (appendDataState.forceToggle) {
+    appendDataState.forceToggle.addEventListener("change", () => {
+        if (appendDataState.replaceToggle) {
+            if (appendDataState.forceToggle.checked) {
+                appendDataState.replaceToggle.checked = false;
+                appendDataState.replaceToggle.disabled = true;
+            }
+            else {
+                appendDataState.replaceToggle.disabled = false;
+            }
+        }
         if (appendDataState.textArea && appendDataState.textArea.value.trim()) {
             scheduleAppendDataParse();
         }

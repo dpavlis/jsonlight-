@@ -103,6 +103,13 @@ body.theme-dark .append-data-count {
     font-weight: 600;
 }
 
+.append-data-force {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-bottom: 0;
+}
+
 #append-data-text {
     font-size: 0.8rem;
 }
